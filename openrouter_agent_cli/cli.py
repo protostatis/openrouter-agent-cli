@@ -16,7 +16,8 @@ from typing import Any
 import httpx
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openrouter/auto"
+# Default to a free-tier model so first-run usage does not consume paid credits.
+DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
 DEFAULT_SESSION_ID = "default"
 DEFAULT_MAX_TURNS = 24
 DEFAULT_MAX_HISTORY_MESSAGES = 60
@@ -714,4 +715,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
