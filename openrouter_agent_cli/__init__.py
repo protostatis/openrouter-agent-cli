@@ -1,0 +1,2 @@
+"""openrouter-agent-cli package."""
+
