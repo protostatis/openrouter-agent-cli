@@ -46,6 +46,7 @@ def _safe_rel(path: Path, root: Path) -> str:
 def _extract_refs(answer: str, repo_root: Path, max_refs: int) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
+    repo_root_resolved = repo_root.resolve()
     for m in REF_RE.finditer(answer or ""):
         raw_path = m.group("path")
         line = int(m.group("line"))
@@ -57,18 +58,38 @@ def _extract_refs(answer: str, repo_root: Path, max_refs: int) -> list[dict[str,
             break
 
         if raw_path.startswith("/"):
-            path = Path(raw_path).expanduser()
+            candidate = Path(raw_path).expanduser()
         else:
-            path = (repo_root / raw_path).expanduser()
-        exists = path.exists() and path.is_file()
+            candidate = (repo_root_resolved / raw_path).expanduser()
+
+        path: Path | None = None
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(repo_root_resolved)
+            path = resolved
+        except Exception:
+            pass
+
+        if path is None:
+            refs.append(
+                {
+                    "raw_path": raw_path,
+                    "line": line,
+                    "in_repo": False,
+                    "exists": False,
+                    "line_ok": False,
+                    "resolved_path": "",
+                }
+            )
+            continue
+
+        exists = path.is_file()
         line_ok = False
-        line_text = ""
         if exists:
             try:
                 lines = path.read_text(errors="replace").splitlines()
                 if 1 <= line <= len(lines):
                     line_ok = True
-                    line_text = lines[line - 1].strip()
             except Exception:
                 pass
 
@@ -76,9 +97,9 @@ def _extract_refs(answer: str, repo_root: Path, max_refs: int) -> list[dict[str,
             {
                 "raw_path": raw_path,
                 "line": line,
+                "in_repo": True,
                 "exists": exists,
                 "line_ok": line_ok,
-                "line_text": line_text[:220],
                 "resolved_path": str(path),
             }
         )
@@ -90,10 +111,19 @@ def _ref_summary(refs: list[dict[str, Any]], repo_root: Path) -> str:
         return "No file:line references found in answer."
     lines = []
     for ref in refs:
+        if not ref.get("in_repo"):
+            lines.append(f"- invalid: {ref['raw_path']}:{ref['line']} | blocked (outside --repo-root)")
+            continue
+
         status = "valid" if ref["line_ok"] else "invalid"
         rel = _safe_rel(Path(ref["resolved_path"]), repo_root)
-        snippet = ref["line_text"] or "(no readable line)"
-        lines.append(f"- {status}: {rel}:{ref['line']} | {snippet}")
+        if ref["line_ok"]:
+            detail = "line exists"
+        elif ref["exists"]:
+            detail = "line out of range"
+        else:
+            detail = "file missing"
+        lines.append(f"- {status}: {rel}:{ref['line']} | {detail}")
     return "\n".join(lines)
 
 
