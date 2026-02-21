@@ -1,0 +1,3 @@
+Summarize what this repository does in 5 bullets and mention the default model.
+Describe exactly how run_bash is invoked, including permission checks and timeout handling.
+Propose one concrete hardening improvement for tool execution and explain why.

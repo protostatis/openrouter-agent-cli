@@ -1,0 +1,11 @@
+Act as a senior code reviewer. Analyze `openrouter_agent_cli/cli.py` for reliability and safety issues in tool execution, loop handling, and context compaction. Return at least 4 findings ordered by severity with exact `file:line` references and a concrete fix for each.
+
+Design a minimal fix for this bug without editing files: if compaction summary generation fails, the CLI should preserve existing conversation history instead of replacing old context with an error summary. Return a unified diff patch for `openrouter_agent_cli/cli.py` and include a short rationale.
+
+Propose a concrete refactor plan to split the CLI into modules (`tool_runtime`, `openrouter_client`, `session_store`, `commands`) and add unit tests. Include a target file tree, 8-12 specific test cases, and exact shell commands to run validation.
+
+Write an implementation plan to add a second tool `read_file(path, max_chars)` with permission checks matching `run_bash`. Include schema, command handling changes, and migration risks.
+
+Create a focused regression test matrix for local CLI behavior around `--max-history-messages`, `/compact`, loop-break handling, and tool result coercion to string. Include expected assertions for each case.
+
+Produce a security hardening plan for `run_bash` in this repo: threat model, concrete mitigations, and a staged rollout that preserves usability for local development.

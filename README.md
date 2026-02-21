@@ -173,3 +173,78 @@ Example tool result message added by CLI:
 ```
 
 Note: despite the name `run_bash`, execution uses `create_subprocess_shell` (system shell), not an explicit `bash` binary unless the command itself invokes `bash`.
+
+## Prompt A/B testing
+
+This repo includes a small harness for comparing system prompts:
+
+- script: `scripts/ab_test_system_prompts.py`
+- prompt variants:
+  - `prompts/system_prompt_control.md`
+  - `prompts/system_prompt_agentic_v1.md`
+- sample tasks: `ab_tests/tasks_sample.txt`
+
+Run prompt-only comparison (no tools):
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python scripts/ab_test_system_prompts.py \
+  --tool-mode none \
+  --model arcee-ai/trinity-large-preview:free
+```
+
+Run with tool execution enabled (use cautiously):
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python scripts/ab_test_system_prompts.py \
+  --tool-mode execute \
+  --workdir "$(pwd)" \
+  --model arcee-ai/trinity-large-preview:free
+```
+
+Artifacts are written to `ab_tests/results/<timestamp>/`:
+
+- `results.json` full transcripts and metadata
+- `summary.csv` flat comparison table
+- `summary.md` quick markdown summary
+
+Run a harder repeated suite (2 prompts x 6 tasks x 3 repeats):
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python scripts/ab_test_system_prompts.py \
+  --tool-mode execute \
+  --tasks-file ab_tests/tasks_hard_suite_v1.txt \
+  --repeats 3 \
+  --max-turns 3 \
+  --max-tokens 1000 \
+  --request-timeout 40 \
+  --command-timeout 20 \
+  --workdir "$(pwd)" \
+  --model arcee-ai/trinity-large-preview:free \
+  --output-dir ab_tests/results/hard_suite_v1_r3
+```
+
+Evaluate quality and groundedness from a run:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python scripts/evaluate_ab_results.py \
+  --results ab_tests/results/hard_suite_v1_r3/results.json \
+  --judge-model arcee-ai/trinity-large-preview:free \
+  --output-dir ab_tests/results/hard_suite_v1_r3/eval
+```
+
+Evaluator artifacts:
+
+- `evaluation.json` per-case raw evaluation details
+- `evaluation.csv` tabular scores
+- `leaderboard.md` aggregated per-prompt ranking
+
+## Findings and release docs
+
+- benchmark findings: `docs/AB_FINDINGS_2026-02-21.md`
+- public release checklist: `docs/PUBLIC_RELEASE_CHECKLIST.md`
+- security policy: `SECURITY.md`
+- env template: `.env.example`
