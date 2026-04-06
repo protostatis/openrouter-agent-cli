@@ -29,6 +29,16 @@ export OPENROUTER_API_KEY=sk-or-...
 python -m openrouter_agent_cli.cli
 ```
 
+## Non-interactive prompt
+
+`--prompt` (short `-p`) lets another process run the CLI with a single user message, emit only the assistant reply to `stdout`, and exit immediately. Operation logs, tool call summaries, and permission notices are written to `stderr`, and tool calls are automatically denied unless you disable tools with `--no-tools`.
+
+Example:
+
+```bash
+openrouter-agent --prompt "Explain tail recursion" --no-tools
+```
+
 ## Useful flags
 
 ```bash
@@ -73,7 +83,8 @@ openrouter-agent --no-tools
 
 ## Security notes
 
-- `run_bash` executes shell commands on your machine in `--workdir`
+- `run_bash` executes shell commands on your machine in `--workdir`.
+- Model outputs (tool calls) are reflected literally in `run_bash`, so treat every allowed tool call as untrusted input and keep the allow/deny policy enforced unless you deliberately want to run everything.
 - default policy is `ask` for every tool call
 - use `/deny *` for a fully no-tools session
 - default model is free-tier (`arcee-ai/trinity-large-preview:free`); override with `--model` or `OPENROUTER_MODEL`

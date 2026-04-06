@@ -7,7 +7,6 @@ import asyncio
 import json
 import os
 import re
-import signal
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,7 +14,13 @@ from typing import Any
 
 import httpx
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+from openrouter_agent_cli.utils import (
+    OPENROUTER_URL,
+    _decode_tool_arguments,
+    call_openrouter,
+    run_bash,
+)
+
 # Default to a free-tier model so first-run usage does not consume paid credits.
 DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
 DEFAULT_SESSION_ID = "default"
@@ -52,7 +57,88 @@ TOOLS = [
                 "required": ["command"],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": (
+                "Read the contents of a file and return it as text. "
+                "Supports optional line range for large files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file (relative to working directory or absolute).",
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Start line (1-indexed). Default: 1.",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "End line (1-indexed, inclusive). Default: last line.",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Write content to a file, creating or overwriting it. "
+                "Creates parent directories if they do not exist."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file (relative to working directory or absolute).",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write to the file.",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": (
+                "Edit an existing file by replacing a specific text block. "
+                "The old_string must match exactly (including whitespace). "
+                "Use read_file first to see the current content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file (relative to working directory or absolute).",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "Exact text block to replace (must match uniquely in the file).",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement text block.",
+                    },
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
 ]
 
 
@@ -63,23 +149,6 @@ def _sanitize_session_id(session_id: str) -> str:
 
 def _truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
-
-
-def _decode_tool_arguments(raw_args: Any) -> dict[str, Any]:
-    if raw_args is None:
-        return {}
-    if isinstance(raw_args, dict):
-        return raw_args
-    if isinstance(raw_args, str):
-        value = raw_args.strip()
-        if not value:
-            return {}
-        try:
-            decoded = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return decoded if isinstance(decoded, dict) else {}
-    return {}
 
 
 def _message_content_as_text(message: dict[str, Any]) -> str:
@@ -137,14 +206,33 @@ class OpenRouterAgentCLI:
         self.command_timeout = min(max(1, command_timeout), 600)
         self.tools_enabled = tools_enabled
         self.system_prompt = system_prompt
+        self.non_interactive_mode = False
         self.policy = ToolPermissionPolicy()
+        self.one_shot_prompt: str | None = None
+        self.session_tokens: dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
-        self.session_root = (
-            Path(os.environ.get("OPENROUTER_AGENT_SESSION_DIR", "~/.openrouter-agent-cli/sessions"))
-            .expanduser()
-        )
+        self.session_root = Path(
+            os.environ.get(
+                "OPENROUTER_AGENT_SESSION_DIR", "~/.openrouter-agent-cli/sessions"
+            )
+        ).expanduser()
         self.session_root.mkdir(parents=True, exist_ok=True)
         self.messages = self._load_session()
+
+    def _log(self, message: str, *, end: str = "\n") -> None:
+        target = sys.stderr if self.non_interactive_mode else sys.stdout
+        print(message, file=target, end=end)
+
+    def _output_response(self, text: str) -> str:
+        if self.non_interactive_mode:
+            print(text)
+        else:
+            print(f"\nassistant> {text}\n")
+        return text
 
     @property
     def _session_path(self) -> Path:
@@ -155,6 +243,13 @@ class OpenRouterAgentCLI:
             data = json.loads(self._session_path.read_text())
             stored = data.get("messages", [])
             if isinstance(stored, list):
+                stored_prompt = data.get("system_prompt", "")
+                if stored_prompt and stored_prompt != self.system_prompt:
+                    print(
+                        "[session] System prompt changed since last session. "
+                        "Old conversation context may reference the previous prompt.",
+                        file=sys.stderr,
+                    )
                 return [{"role": "system", "content": self.system_prompt}] + stored
         except FileNotFoundError:
             pass
@@ -166,7 +261,7 @@ class OpenRouterAgentCLI:
         non_system = [m for m in self.messages if m.get("role") != "system"]
         if len(non_system) > self.max_history_messages:
             non_system = non_system[-self.max_history_messages :]
-        payload = {"messages": non_system}
+        payload = {"messages": non_system, "system_prompt": self.system_prompt}
         try:
             self._session_path.write_text(json.dumps(payload))
         except Exception as e:
@@ -182,14 +277,19 @@ class OpenRouterAgentCLI:
         return sorted(names)
 
     async def run(self):
-        print("OpenRouter Agent CLI")
-        print(f"Model      : {self.model}")
-        print(f"Session    : {self.session_id}")
-        print(f"Working dir: {self.workdir}")
-        print("Type /help for commands. Type /exit to quit.")
-        print()
+        if not self.non_interactive_mode:
+            print("OpenRouter Agent CLI")
+            print(f"Model      : {self.model}")
+            print(f"Session    : {self.session_id}")
+            print(f"Working dir: {self.workdir}")
+            print("Type /help for commands. Type /exit to quit.")
+            print()
 
         async with httpx.AsyncClient(timeout=60.0) as client:
+            if self.one_shot_prompt:
+                await self._run_user_turn(client, self.one_shot_prompt)
+                return
+
             while True:
                 try:
                     user_text = await asyncio.to_thread(input, "you> ")
@@ -209,7 +309,9 @@ class OpenRouterAgentCLI:
 
                 await self._run_user_turn(client, user_text)
 
-    async def _handle_command(self, client: httpx.AsyncClient, command_line: str) -> bool:
+    async def _handle_command(
+        self, client: httpx.AsyncClient, command_line: str
+    ) -> bool:
         parts = command_line.split(maxsplit=1)
         cmd = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
@@ -246,9 +348,13 @@ class OpenRouterAgentCLI:
         if cmd == "/usage":
             msg_count = len([m for m in self.messages if m.get("role") != "system"])
             token_est = _estimate_tokens(self.messages)
-            print(f"Messages (non-system): {msg_count}")
-            print(f"Estimated tokens     : ~{token_est}")
-            print(f"History limit        : {self.max_history_messages}")
+            actual = self.session_tokens
+            print(f"Messages (non-system) : {msg_count}")
+            print(f"Estimated tokens      : ~{token_est}")
+            print(f"Actual session tokens : {actual['total_tokens']}")
+            print(f"  prompt_tokens       : {actual['prompt_tokens']}")
+            print(f"  completion_tokens   : {actual['completion_tokens']}")
+            print(f"History limit         : {self.max_history_messages}")
             return True
 
         if cmd == "/context":
@@ -286,8 +392,12 @@ class OpenRouterAgentCLI:
                 return True
             print(f"Tools enabled: {self.tools_enabled}")
             print(f"Available tools: {', '.join(self._tool_names())}")
-            print(f"Allow list: {sorted(self.policy.allow) if self.policy.allow else '[]'}")
-            print(f"Deny list : {sorted(self.policy.deny) if self.policy.deny else '[]'}")
+            print(
+                f"Allow list: {sorted(self.policy.allow) if self.policy.allow else '[]'}"
+            )
+            print(
+                f"Deny list : {sorted(self.policy.deny) if self.policy.deny else '[]'}"
+            )
             return True
 
         if cmd == "/allow":
@@ -345,46 +455,33 @@ class OpenRouterAgentCLI:
         messages: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0,
-            "max_tokens": 4096,
-        }
-        if tool_choice == "none" or not self.tools_enabled:
-            body["tool_choice"] = "none"
-        else:
-            body["tools"] = TOOLS
-            body["tool_choice"] = "auto"
+        tools = TOOLS if self.tools_enabled and tool_choice != "none" else None
+        effective_tool_choice = (
+            "none" if tool_choice == "none" or not self.tools_enabled else "auto"
+        )
+        data = await call_openrouter(
+            client,
+            api_key=self.api_key,
+            model=self.model,
+            messages=messages,
+            max_tokens=4096,
+            tool_choice=effective_tool_choice,
+            tools=tools,
+        )
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": os.environ.get(
-                "OPENROUTER_AGENT_REFERER", "https://github.com/local/openrouter-agent-cli"
-            ),
-            "X-Title": os.environ.get("OPENROUTER_AGENT_TITLE", "OpenRouter Agent CLI"),
-        }
+        usage = data.get("usage") or {}
+        if usage:
+            self.session_tokens["prompt_tokens"] += int(usage.get("prompt_tokens", 0))
+            self.session_tokens["completion_tokens"] += int(
+                usage.get("completion_tokens", 0)
+            )
+            self.session_tokens["total_tokens"] += int(usage.get("total_tokens", 0))
 
-        resp = await client.post(OPENROUTER_URL, json=body, headers=headers)
-        if resp.status_code in (500, 502, 503):
-            for attempt in range(1, 3):
-                await asyncio.sleep(attempt * 2)
-                resp = await client.post(OPENROUTER_URL, json=body, headers=headers)
-                if resp.status_code not in (500, 502, 503):
-                    break
-        if not resp.is_success:
-            resp.raise_for_status()
-
-        data = resp.json()
-        if "choices" not in data:
-            err = data.get("error", {})
-            if isinstance(err, dict):
-                err = err.get("message", str(data))
-            raise RuntimeError(f"OpenRouter error: {err}")
         return data
 
-    async def _compact_history(self, client: httpx.AsyncClient, force: bool = False) -> bool:
+    async def _compact_history(
+        self, client: httpx.AsyncClient, force: bool = False
+    ) -> bool:
         non_system = [m for m in self.messages if m.get("role") != "system"]
         if not force and len(non_system) <= self.max_history_messages:
             return False
@@ -415,16 +512,23 @@ class OpenRouterAgentCLI:
 
         summary = ""
         try:
-            summary_resp = await self._call_openrouter(client, summary_prompt, tool_choice="none")
+            summary_resp = await self._call_openrouter(
+                client, summary_prompt, tool_choice="none"
+            )
             summary_msg = summary_resp["choices"][0]["message"]
-            summary = (summary_msg.get("content") or summary_msg.get("reasoning") or "").strip()
+            summary = (
+                summary_msg.get("content") or summary_msg.get("reasoning") or ""
+            ).strip()
         except Exception as e:
             summary = f"Compaction summary failed: {e}"
 
         if not summary:
             summary = "No significant prior context."
 
-        summary_entry = {"role": "assistant", "content": f"[Context summary]\n{summary}"}
+        summary_entry = {
+            "role": "assistant",
+            "content": f"[Context summary]\n{summary}",
+        }
         self.messages = [
             {"role": "system", "content": self.system_prompt},
             summary_entry,
@@ -434,6 +538,11 @@ class OpenRouterAgentCLI:
         return True
 
     async def _confirm_tool_call(self, tool_name: str, args: dict[str, Any]) -> bool:
+        if self.non_interactive_mode:
+            self._log(
+                f"[permission] Tool '{tool_name}' denied in non-interactive mode."
+            )
+            return False
         preview = _truncate(json.dumps(args, ensure_ascii=False), 220)
         question = (
             f"[permission] Allow tool '{tool_name}' args={preview}? "
@@ -450,35 +559,104 @@ class OpenRouterAgentCLI:
             return False
         return choice in ("y", "yes")
 
-    async def _run_bash(self, command: str, timeout_seconds: int) -> str:
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                cwd=self.workdir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            return f"Command timed out after {timeout_seconds}s."
-        except Exception as e:
-            return f"Command failed to start: {e}"
+    def _resolve_file_path(self, path: str) -> Path:
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(self.workdir) / p
+        return p.resolve()
 
-        out = stdout.decode("utf-8", errors="replace").strip()
-        err = stderr.decode("utf-8", errors="replace").strip()
-        if proc.returncode == 0:
-            return out or "(command succeeded with no output)"
-        if out and err:
-            return f"exit={proc.returncode}\nstdout:\n{out}\nstderr:\n{err}"
+    def _validate_path_in_workdir(self, path: Path) -> str | None:
+        try:
+            path.resolve().relative_to(Path(self.workdir).resolve())
+            return None
+        except ValueError:
+            return f"Path outside working directory: {path}"
+
+    async def _read_file(
+        self, path: str, start_line: int | None, end_line: int | None
+    ) -> str:
+        try:
+            file_path = self._resolve_file_path(path)
+        except Exception as e:
+            return f"read_file error: invalid path '{path}': {e}"
+
+        err = self._validate_path_in_workdir(file_path)
         if err:
-            return f"exit={proc.returncode}\nstderr:\n{err}"
-        if out:
-            return f"exit={proc.returncode}\nstdout:\n{out}"
-        return f"exit={proc.returncode} (no output)"
+            return f"read_file error: {err}"
+
+        if not file_path.is_file():
+            return f"read_file error: file not found: {file_path}"
+
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return f"read_file error: {e}"
+
+        lines = content.splitlines()
+        total = len(lines)
+        start = max(1, start_line or 1) - 1
+        end = end_line or total
+        end = min(end, total)
+
+        if start >= total:
+            return f"read_file error: start_line {start_line} exceeds file length ({total} lines)"
+
+        selected = lines[start:end]
+        header = f"File: {file_path} (lines {start + 1}-{end} of {total})\n"
+        return header + "\n".join(selected)
+
+    async def _write_file(self, path: str, content: str) -> str:
+        try:
+            file_path = self._resolve_file_path(path)
+        except Exception as e:
+            return f"write_file error: invalid path '{path}': {e}"
+
+        err = self._validate_path_in_workdir(file_path)
+        if err:
+            return f"write_file error: {err}"
+
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+            return f"write_file ok: wrote {len(content)} bytes to {file_path}"
+        except Exception as e:
+            return f"write_file error: {e}"
+
+    async def _edit_file(self, path: str, old_string: str, new_string: str) -> str:
+        try:
+            file_path = self._resolve_file_path(path)
+        except Exception as e:
+            return f"edit_file error: invalid path '{path}': {e}"
+
+        err = self._validate_path_in_workdir(file_path)
+        if err:
+            return f"edit_file error: {err}"
+
+        if not file_path.is_file():
+            return f"edit_file error: file not found: {file_path}"
+
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return f"edit_file error: {e}"
+
+        occurrences = content.count(old_string)
+        if occurrences == 0:
+            return f"edit_file error: old_string not found in {file_path}"
+        if occurrences > 1:
+            return (
+                f"edit_file error: old_string found {occurrences} times, must be unique"
+            )
+
+        new_content = content.replace(old_string, new_string, 1)
+        try:
+            file_path.write_text(new_content, encoding="utf-8")
+            return f"edit_file ok: replaced 1 occurrence in {file_path}"
+        except Exception as e:
+            return f"edit_file error: {e}"
+
+    async def _run_bash(self, command: str, timeout_seconds: int) -> str:
+        return await run_bash(command, self.workdir, timeout_seconds)
 
     async def _execute_tool(self, tool_name: str, args: dict[str, Any]) -> str:
         if not self.tools_enabled:
@@ -492,23 +670,56 @@ class OpenRouterAgentCLI:
             if not allowed:
                 return f"Tool call denied by user: {tool_name}"
 
-        if tool_name != "run_bash":
-            return f"Unknown tool: {tool_name}"
+        if tool_name == "run_bash":
+            command = str(args.get("command", "")).strip()
+            if not command:
+                return "run_bash error: 'command' is required."
 
-        command = str(args.get("command", "")).strip()
-        if not command:
-            return "run_bash error: 'command' is required."
+            timeout_seconds = args.get("timeout_seconds", self.command_timeout)
+            try:
+                timeout_seconds = int(timeout_seconds)
+            except (TypeError, ValueError):
+                timeout_seconds = self.command_timeout
+            timeout_seconds = min(max(1, timeout_seconds), 600)
 
-        timeout_seconds = args.get("timeout_seconds", self.command_timeout)
-        try:
-            timeout_seconds = int(timeout_seconds)
-        except (TypeError, ValueError):
-            timeout_seconds = self.command_timeout
-        timeout_seconds = min(max(1, timeout_seconds), 600)
+            return await self._run_bash(command, timeout_seconds)
 
-        return await self._run_bash(command, timeout_seconds)
+        if tool_name == "read_file":
+            file_path = str(args.get("path", "")).strip()
+            if not file_path:
+                return "read_file error: 'path' is required."
+            start_line = args.get("start_line")
+            end_line = args.get("end_line")
+            try:
+                start_line = int(start_line) if start_line is not None else None
+            except (TypeError, ValueError):
+                start_line = None
+            try:
+                end_line = int(end_line) if end_line is not None else None
+            except (TypeError, ValueError):
+                end_line = None
+            return await self._read_file(file_path, start_line, end_line)
 
-    async def _run_user_turn(self, client: httpx.AsyncClient, user_text: str):
+        if tool_name == "write_file":
+            file_path = str(args.get("path", "")).strip()
+            content = str(args.get("content", ""))
+            if not file_path:
+                return "write_file error: 'path' is required."
+            return await self._write_file(file_path, content)
+
+        if tool_name == "edit_file":
+            file_path = str(args.get("path", "")).strip()
+            old_str = args.get("old_string", "")
+            new_str = args.get("new_string", "")
+            if not file_path:
+                return "edit_file error: 'path' is required."
+            if not old_str:
+                return "edit_file error: 'old_string' is required."
+            return await self._edit_file(file_path, old_str, new_str)
+
+        return f"Unknown tool: {tool_name}"
+
+    async def _run_user_turn(self, client: httpx.AsyncClient, user_text: str) -> str:
         self.messages.append({"role": "user", "content": user_text})
         last_tool_signature: str | None = None
         repeated_count = 0
@@ -516,17 +727,17 @@ class OpenRouterAgentCLI:
         for turn in range(self.max_turns):
             try:
                 if await self._compact_history(client):
-                    print("[context] Auto-compacted old history.")
+                    self._log("[context] Auto-compacted old history.")
                 response = await self._call_openrouter(client, self.messages)
             except httpx.HTTPStatusError as e:
                 detail = _truncate(e.response.text, 300)
-                print(f"[openrouter] HTTP {e.response.status_code}: {detail}")
+                self._log(f"[openrouter] HTTP {e.response.status_code}: {detail}")
                 self._save_session()
-                return
+                return ""
             except Exception as e:
-                print(f"[openrouter] Request failed: {e}")
+                self._log(f"[openrouter] Request failed: {e}")
                 self._save_session()
-                return
+                return ""
 
             choice = response["choices"][0]
             message = choice["message"]
@@ -538,9 +749,9 @@ class OpenRouterAgentCLI:
                 text = message.get("content") or message.get("reasoning") or ""
                 if not text:
                     text = f"[empty response, finish_reason={finish_reason}]"
-                print(f"\nassistant> {text}\n")
+                self._output_response(text)
                 self._save_session()
-                return
+                return text
 
             signature = json.dumps(
                 [
@@ -572,17 +783,23 @@ class OpenRouterAgentCLI:
                         }
                     )
                 try:
-                    forced = await self._call_openrouter(client, self.messages, tool_choice="none")
+                    forced = await self._call_openrouter(
+                        client, self.messages, tool_choice="none"
+                    )
                     forced_message = forced["choices"][0]["message"]
-                    text = forced_message.get("content") or forced_message.get("reasoning") or ""
+                    text = (
+                        forced_message.get("content")
+                        or forced_message.get("reasoning")
+                        or ""
+                    )
                     self.messages.append(forced_message)
                 except Exception:
                     text = ""
                 if not text:
                     text = "I got stuck in a tool loop and could not make progress."
-                print(f"\nassistant> {text}\n")
+                self._output_response(text)
                 self._save_session()
-                return
+                return text
 
             tool_results = []
             for idx, tool_call in enumerate(tool_calls):
@@ -591,10 +808,12 @@ class OpenRouterAgentCLI:
                 tool_args = _decode_tool_arguments(fn.get("arguments"))
                 fn["arguments"] = json.dumps(tool_args, separators=(",", ":"))
 
-                print(f"[tool] {tool_name}({_truncate(json.dumps(tool_args), 140)})")
+                self._log(
+                    f"[tool] {tool_name}({_truncate(json.dumps(tool_args), 140)})"
+                )
                 result = await self._execute_tool(tool_name, tool_args)
                 preview = _truncate(result.replace("\n", " "), 220)
-                print(f"[tool-result] {preview}")
+                self._log(f"[tool-result] {preview}")
 
                 tool_call_id = tool_call.get("id") or f"tc-{turn + 1}-{idx + 1}"
                 tool_results.append(
@@ -607,8 +826,9 @@ class OpenRouterAgentCLI:
 
             self.messages.extend(tool_results)
 
-        print("[agent] Reached max turns for this user message.")
+        self._log("[agent] Reached max turns for this user message.")
         self._save_session()
+        return ""
 
 
 def _load_system_prompt(path: str | None) -> str:
@@ -672,10 +892,18 @@ def main() -> None:
         "--system-prompt-file",
         help="Path to a custom system prompt file.",
     )
+    parser.add_argument(
+        "--prompt",
+        "-p",
+        help="Run a single prompt, emit the assistant reply on stdout, and exit.",
+    )
     args = parser.parse_args()
 
     if not args.api_key:
-        print("ERROR: missing OpenRouter API key. Set OPENROUTER_API_KEY or pass --api-key.", file=sys.stderr)
+        print(
+            "ERROR: missing OpenRouter API key. Set OPENROUTER_API_KEY or pass --api-key.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
     try:
@@ -696,21 +924,14 @@ def main() -> None:
         system_prompt=system_prompt,
     )
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, lambda: loop.stop())
-        except NotImplementedError:
-            # add_signal_handler is not available on some platforms.
-            pass
+    if args.prompt is not None:
+        cli.one_shot_prompt = args.prompt
+        cli.non_interactive_mode = True
 
     try:
-        loop.run_until_complete(cli.run())
+        asyncio.run(cli.run())
     except KeyboardInterrupt:
         pass
-    finally:
-        loop.close()
 
 
 if __name__ == "__main__":

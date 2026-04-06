@@ -17,7 +17,8 @@ from typing import Any
 
 import httpx
 
-from openrouter_agent_cli.cli import DEFAULT_MODEL, OPENROUTER_URL, TOOLS
+from openrouter_agent_cli.cli import DEFAULT_MODEL, TOOLS
+from openrouter_agent_cli.utils import call_openrouter, run_bash, _decode_tool_arguments
 
 
 @dataclass
@@ -37,52 +38,8 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", value).strip("_") or "item"
 
 
-def _decode_tool_arguments(raw_args: Any) -> dict[str, Any]:
-    if raw_args is None:
-        return {}
-    if isinstance(raw_args, dict):
-        return raw_args
-    if isinstance(raw_args, str):
-        raw_args = raw_args.strip()
-        if not raw_args:
-            return {}
-        try:
-            decoded = json.loads(raw_args)
-        except json.JSONDecodeError:
-            return {}
-        return decoded if isinstance(decoded, dict) else {}
-    return {}
-
-
 async def _run_bash(command: str, cwd: str, timeout_seconds: int) -> str:
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        return f"Command timed out after {timeout_seconds}s."
-    except Exception as exc:
-        return f"Command failed to start: {exc}"
-
-    out = stdout.decode("utf-8", errors="replace").strip()
-    err = stderr.decode("utf-8", errors="replace").strip()
-    if proc.returncode == 0:
-        return out or "(command succeeded with no output)"
-    if out and err:
-        return f"exit={proc.returncode}\nstdout:\n{out}\nstderr:\n{err}"
-    if err:
-        return f"exit={proc.returncode}\nstderr:\n{err}"
-    if out:
-        return f"exit={proc.returncode}\nstdout:\n{out}"
-    return f"exit={proc.returncode} (no output)"
+    return await run_bash(command, cwd, timeout_seconds)
 
 
 async def _call_openrouter(
@@ -93,34 +50,23 @@ async def _call_openrouter(
     max_tokens: int,
     tool_mode: str,
 ) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0,
-        "max_tokens": max_tokens,
-    }
-    if tool_mode == "none":
-        body["tool_choice"] = "none"
-    else:
-        body["tools"] = TOOLS
-        body["tool_choice"] = "auto"
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": os.environ.get(
-            "OPENROUTER_AGENT_REFERER", "https://github.com/local/openrouter-agent-cli"
-        ),
-        "X-Title": os.environ.get("OPENROUTER_AGENT_TITLE", "OpenRouter Agent Prompt AB"),
-    }
-    resp = await client.post(OPENROUTER_URL, json=body, headers=headers)
-    if not resp.is_success:
-        resp.raise_for_status()
-    return resp.json()
+    tools = TOOLS if tool_mode != "none" else None
+    tool_choice = "auto" if tool_mode != "none" else "none"
+    return await call_openrouter(
+        client,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        tool_choice=tool_choice,
+        tools=tools,
+    )
 
 
 def _load_prompt(path: Path) -> PromptVariant:
-    return PromptVariant(name=_safe_name(path.stem), path=path, text=path.read_text().strip())
+    return PromptVariant(
+        name=_safe_name(path.stem), path=path, text=path.read_text().strip()
+    )
 
 
 def _load_tasks(tasks_file: Path | None, inline_tasks: list[str]) -> list[TaskCase]:
@@ -194,7 +140,9 @@ async def _run_case(
             total_tool_calls += len(tool_calls)
 
             if not tool_calls or tool_mode != "execute":
-                text = (message.get("content") or message.get("reasoning") or "").strip()
+                text = (
+                    message.get("content") or message.get("reasoning") or ""
+                ).strip()
                 elapsed = time.perf_counter() - started
                 return {
                     "ok": True,
@@ -253,12 +201,18 @@ async def _run_case(
                 )
                 forced_usage = forced.get("usage") or {}
                 total_prompt_tokens += int(forced_usage.get("prompt_tokens", 0) or 0)
-                total_completion_tokens += int(forced_usage.get("completion_tokens", 0) or 0)
+                total_completion_tokens += int(
+                    forced_usage.get("completion_tokens", 0) or 0
+                )
                 total_tokens += int(forced_usage.get("total_tokens", 0) or 0)
                 forced_choice = (forced.get("choices") or [{}])[0]
                 forced_message = forced_choice.get("message") or {}
                 forced_finish_reason = str(forced_choice.get("finish_reason", ""))
-                forced_text = (forced_message.get("content") or forced_message.get("reasoning") or "").strip()
+                forced_text = (
+                    forced_message.get("content")
+                    or forced_message.get("reasoning")
+                    or ""
+                ).strip()
                 messages.append(forced_message)
                 elapsed = time.perf_counter() - started
                 return {
@@ -299,7 +253,9 @@ async def _run_case(
                     if not command:
                         result = "run_bash error: 'command' is required."
                     else:
-                        result = await _run_bash(command, cwd=workdir, timeout_seconds=timeout_seconds)
+                        result = await _run_bash(
+                            command, cwd=workdir, timeout_seconds=timeout_seconds
+                        )
 
                 tool_results.append(
                     {
@@ -312,9 +268,7 @@ async def _run_case(
             messages.extend(tool_results)
 
         # If we hit max turns while still seeing tool calls, force a final text-only answer.
-        forced_prompt = (
-            "Stop using tools. Provide your final answer now using the gathered context."
-        )
+        forced_prompt = "Stop using tools. Provide your final answer now using the gathered context."
         messages.append({"role": "user", "content": forced_prompt})
         forced = await _call_openrouter(
             client=client,
@@ -331,7 +285,9 @@ async def _run_case(
         forced_choice = (forced.get("choices") or [{}])[0]
         forced_message = forced_choice.get("message") or {}
         forced_finish_reason = str(forced_choice.get("finish_reason", ""))
-        forced_text = (forced_message.get("content") or forced_message.get("reasoning") or "").strip()
+        forced_text = (
+            forced_message.get("content") or forced_message.get("reasoning") or ""
+        ).strip()
         messages.append(forced_message)
         elapsed = time.perf_counter() - started
         return {
@@ -392,7 +348,9 @@ def _write_outputs(results: list[dict[str, Any]], output_dir: Path) -> None:
                 "completion_tokens": row["completion_tokens"],
                 "total_tokens": row["total_tokens"],
                 "latency_seconds": row["latency_seconds"],
-                "final_text_preview": (row["final_text"] or "")[:160].replace("\n", " "),
+                "final_text_preview": (row["final_text"] or "")[:160].replace(
+                    "\n", " "
+                ),
                 "error": row["error"],
             }
         )
@@ -435,7 +393,9 @@ async def _main_async(args: argparse.Namespace) -> int:
         raise RuntimeError("Missing API key. Set OPENROUTER_API_KEY or pass --api-key.")
 
     prompts = [_load_prompt(Path(p).expanduser()) for p in args.prompt]
-    tasks = _load_tasks(Path(args.tasks_file).expanduser() if args.tasks_file else None, args.task)
+    tasks = _load_tasks(
+        Path(args.tasks_file).expanduser() if args.tasks_file else None, args.task
+    )
     output_dir = Path(args.output_dir).expanduser()
 
     print(f"Model: {args.model}")
@@ -483,7 +443,9 @@ async def _main_async(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     default_output = f"ab_tests/results/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     parser = argparse.ArgumentParser(description="Run OpenRouter prompt A/B tests.")
-    parser.add_argument("--api-key", help="OpenRouter API key. Defaults to OPENROUTER_API_KEY.")
+    parser.add_argument(
+        "--api-key", help="OpenRouter API key. Defaults to OPENROUTER_API_KEY."
+    )
     parser.add_argument(
         "--model",
         default=os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL),
@@ -527,12 +489,27 @@ def parse_args() -> argparse.Namespace:
         default=os.getcwd(),
         help="Working directory for tool execution in execute mode.",
     )
-    parser.add_argument("--max-turns", type=int, default=6, help="Max model/tool loop turns per case.")
-    parser.add_argument("--max-tokens", type=int, default=1200, help="Max completion tokens per model call.")
-    parser.add_argument("--command-timeout", type=int, default=30, help="run_bash timeout seconds.")
-    parser.add_argument("--request-timeout", type=float, default=90.0, help="HTTP timeout seconds.")
-    parser.add_argument("--repeats", type=int, default=1, help="Runs each prompt/task pair N times.")
-    parser.add_argument("--output-dir", default=default_output, help="Directory for test artifacts.")
+    parser.add_argument(
+        "--max-turns", type=int, default=6, help="Max model/tool loop turns per case."
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1200,
+        help="Max completion tokens per model call.",
+    )
+    parser.add_argument(
+        "--command-timeout", type=int, default=30, help="run_bash timeout seconds."
+    )
+    parser.add_argument(
+        "--request-timeout", type=float, default=90.0, help="HTTP timeout seconds."
+    )
+    parser.add_argument(
+        "--repeats", type=int, default=1, help="Runs each prompt/task pair N times."
+    )
+    parser.add_argument(
+        "--output-dir", default=default_output, help="Directory for test artifacts."
+    )
     return parser.parse_args()
 
 
