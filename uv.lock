@@ -977,9 +977,17 @@ version = "0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "pyunbrowser" },
 ]
 
 [package.optional-dependencies]
+full = [
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "openai" },
+    { name = "python-dotenv" },
+    { name = "pyunbrowser" },
+]
 unbrowser = [
     { name = "openai" },
     { name = "python-dotenv" },
@@ -993,12 +1001,17 @@ viz = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "matplotlib", marker = "extra == 'full'" },
     { name = "matplotlib", marker = "extra == 'viz'" },
+    { name = "openai", marker = "extra == 'full'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'unbrowser'", specifier = ">=1.0" },
+    { name = "python-dotenv", marker = "extra == 'full'", specifier = ">=1.2.3" },
     { name = "python-dotenv", marker = "extra == 'unbrowser'", specifier = ">=1.2.3" },
+    { name = "pyunbrowser", specifier = ">=0.0.21" },
+    { name = "pyunbrowser", marker = "extra == 'full'", specifier = ">=0.0.21" },
     { name = "pyunbrowser", marker = "extra == 'unbrowser'", specifier = ">=0.0.21" },
 ]
-provides-extras = ["unbrowser", "viz"]
+provides-extras = ["unbrowser", "viz", "full"]
 
 [[package]]
 name = "packaging"
