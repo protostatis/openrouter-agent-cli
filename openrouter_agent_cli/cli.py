@@ -22,6 +22,11 @@ from openrouter_agent_cli.utils import (
 )
 
 try:
+    from openrouter_agent_cli.concurrent import run_concurrent
+except ImportError:  # pragma: no cover
+    run_concurrent = None  # type: ignore
+
+try:
     from openrouter_agent_cli.discovery import run_discover
 except ImportError:  # pragma: no cover
     run_discover = None  # type: ignore
@@ -39,14 +44,14 @@ Use tools only when needed. Explain outputs clearly and stay concise.
 When unsure, ask for clarification before destructive operations.
 
 Tool use:
-- run_bash: local shell (cwd = workdir). Use for files, git, tests, builds.
-- read_file/write_file/edit_file: workdir-jail file ops.
-- discover: web search/navigate via browser. This is a normal tool_call like run_bash.
+- read_file/write_file/edit_file: workdir-jail file ops (preferred for files — they enforce workdir jail). Use these over shell for file reads/writes.
+- run_bash: local shell with cwd=workdir (not jailed; can run any command). Use for git, tests, builds, and when file tools are insufficient.
+- discover: web search/navigate via browser (https only, private addresses blocked). This is a normal tool_call like run_bash.
   Agent fills it: discover(kind="search", query="...", goal="...") or discover(kind="navigate", url="...", goal="...").
   You fill query/url/goal yourself from the user task — no human prompt needed.
   For any web/research task, decompose into 2-5 discover calls IN ONE PARALLEL RESPONSE (parallel tool calls) before answering.
-  Each call runs concurrently (max_concurrency). Use discover for web, run_bash for local. You can mix both in one turn and you invoke your own LLM again next turn to synthesize results.
-  The discover tool itself can invoke LLM extraction internally (navigate_auto with goal) — you don't need to fetch manually.
+  Each discover runs concurrently (max_concurrency); shell/file tools are serialized. You invoke your own LLM again next turn to synthesize results.
+  The discover tool can invoke LLM extraction internally (navigate_auto with goal) — you don't need to fetch manually.
 """
 
 DISCOVER_TOOL = {
@@ -740,17 +745,23 @@ class OpenRouterAgentCLI:
             return "discover error: discovery is disabled (use --discovery auto|mock|real)"
         if run_discover is None:
             return "discover error: discovery module not available"
-        # run_discover is blocking (may do time.sleep or SmartClient I/O) -> thread
-        return await asyncio.to_thread(
-            run_discover,
-            str(args.get("kind", "search")),
-            str(args.get("query", "")),
-            str(args.get("url", "")),
-            str(args.get("goal", "")),
-            discovery_mode=self.discovery_mode,
-            brave_api_key=os.environ.get("BRAVE_API_KEY"),
-            binary=os.environ.get("UNBROWSER_BINARY"),
-        )
+        # run_discover is blocking (may do time.sleep or SmartClient I/O) -> thread with timeout
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    run_discover,
+                    str(args.get("kind", "search")),
+                    str(args.get("query", "")),
+                    str(args.get("url", "")),
+                    str(args.get("goal", "")),
+                    discovery_mode=self.discovery_mode,
+                    brave_api_key=os.environ.get("BRAVE_API_KEY"),
+                    binary=os.environ.get("UNBROWSER_BINARY"),
+                ),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            return "discover error: timed out after 30s"
 
     async def _execute_tool(self, tool_name: str, args: dict[str, Any]) -> str:
         if not self.tools_enabled:
@@ -918,45 +929,49 @@ class OpenRouterAgentCLI:
                 tool_call_id = tc.get("id") or f"tc-{turn + 1}-{idx + 1}"
                 parsed_calls.append((tool_name, tool_args, tool_call_id, tc))
 
-            # Decide execution strategy: concurrent when batch is safe
-            # - Single call -> sequential (no overhead)
-            # - Multiple discover/run_bash -> concurrent if all decisions are not "ask" needing prompt
+            # Decide execution strategy: concurrent only for pure discover batches (P1)
             can_concurrent = False
-            if len(parsed_calls) > 1:
-                # Check permission without prompting: if any is "deny" we still handle, but "ask" in interactive mode would require prompt
+            if len(parsed_calls) > 1 and all(n == "discover" for n, _, _, _ in parsed_calls):
+                # Check permission without prompting
                 ask_needed = False
                 for tname, _, _, _ in parsed_calls:
                     dec = self.policy.decision(tname)
                     if dec == "ask" and not self.non_interactive_mode:
                         ask_needed = True
                         break
-                # Non-interactive ask -> auto-deny fast path, so we can concurrent (all will be denied immediately)
-                # Interactive ask -> must prompt sequentially, so fall back
                 if not ask_needed or self.non_interactive_mode:
                     can_concurrent = True
-                # Also limit concurrency for file tools (write/edit) – keep sequential to avoid races
-                has_file_write = any(n in ("write_file", "edit_file") for n, _, _, _ in parsed_calls)
-                if has_file_write:
-                    can_concurrent = False
 
             tool_results = []
             if can_concurrent and self.max_concurrency > 1:
-                # Log all calls upfront
                 for tname, targs, _, _ in parsed_calls:
                     self._log(f"[tool] {tname}({_truncate(json.dumps(targs), 140)})")
                 self._log(f"[executor] dispatching {len(parsed_calls)} call(s) concurrently (cap={self.max_concurrency})")
 
-                async def _handler(name: str, args: dict[str, Any]) -> str:
-                    return await self._execute_tool(name, args)
+                if run_concurrent is not None:
+                    # Use shared helper with exception isolation
+                    calls = [(n, a, cid) for n, a, cid, _ in parsed_calls]
 
-                # Use semaphore-gated gather (preserves input order)
-                sem = asyncio.Semaphore(self.max_concurrency)
+                    async def _handler(name: str, args: dict[str, Any]) -> str:
+                        return await self._execute_tool(name, args)
 
-                async def _gated(name: str, args: dict[str, Any]) -> str:
-                    async with sem:
-                        return await _handler(name, args)
+                    results = await run_concurrent(calls, _handler, max_concurrency=self.max_concurrency)
+                else:
+                    # Fallback inline with isolation
+                    sem = asyncio.Semaphore(self.max_concurrency)
 
-                results = await asyncio.gather(*[_gated(n, a) for n, a, _, _ in parsed_calls])
+                    async def _handler(name: str, args: dict[str, Any]) -> str:
+                        return await self._execute_tool(name, args)
+
+                    async def _gated(name: str, args: dict[str, Any]) -> str:
+                        async with sem:
+                            try:
+                                return await _handler(name, args)
+                            except Exception as e:
+                                return f"Tool error ({name}): {e}"
+
+                    results = await asyncio.gather(*[_gated(n, a) for n, a, _, _ in parsed_calls])
+
                 for (_, _, tcid, _), res in zip(parsed_calls, results):
                     preview = _truncate(res.replace("\n", " "), 220)
                     self._log(f"[tool-result] {preview}")
@@ -976,18 +991,46 @@ class OpenRouterAgentCLI:
         return ""
 
 
-def _load_dotenv() -> None:
-    """Load .env from cwd and repo root without requiring python-dotenv."""
-    # Prefer python-dotenv if installed (handles quotes, export, etc.)
-    try:
-        from dotenv import load_dotenv  # type: ignore
+_ENV_ALLOWLIST = {
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MODEL",
+    "OPENROUTER_AGENT_DISCOVERY",
+    "OPENROUTER_AGENT_MAX_CONCURRENCY",
+    "OPENROUTER_AGENT_REFERER",
+    "OPENROUTER_AGENT_TITLE",
+    "OPENROUTER_AGENT_SESSION_DIR",
+    "BRAVE_API_KEY",
+    "UNBROWSER_BINARY",
+}
 
-        load_dotenv(override=False)
+
+def _load_dotenv(env_file: str | None = None) -> None:
+    """Load .env from explicit file or cwd/repo root, allowlisted keys only."""
+    # Explicit --env-file takes precedence
+    candidates: list[Path] = []
+    if env_file:
+        candidates.append(Path(env_file).expanduser())
+    else:
+        candidates.extend([Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"])
+
+    # Prefer python-dotenv if installed, but filter to allowlist
+    try:
+        from dotenv import dotenv_values  # type: ignore
+
+        for p in candidates:
+            if not p.is_file():
+                continue
+            try:
+                for k, v in dotenv_values(p).items():
+                    if k in _ENV_ALLOWLIST and k not in os.environ and v is not None:
+                        os.environ[k] = v
+            except Exception:
+                continue
         return
     except ImportError:
         pass
-    # Minimal fallback: parse key=value lines, don't override existing env
-    for env_path in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+    # Minimal fallback
+    for env_path in candidates:
         if not env_path.is_file():
             continue
         try:
@@ -995,11 +1038,15 @@ def _load_dotenv() -> None:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
+                # handle optional leading "export "
+                if line.startswith("export "):
+                    line = line[7:].strip()
                 k, v = line.split("=", 1)
                 k = k.strip()
+                if k not in _ENV_ALLOWLIST or k in os.environ:
+                    continue
                 v = v.strip().strip('"').strip("'")
-                if k and k not in os.environ:
-                    os.environ[k] = v
+                os.environ[k] = v
         except Exception:
             continue
 
@@ -1015,7 +1062,18 @@ def _load_system_prompt(path: str | None) -> str:
 
 
 def main() -> None:
+    # Pre-load default .env (allowlisted) so OPENROUTER_API_KEY/MODEL are available for defaults
     _load_dotenv()
+    # Early peek for explicit --env-file without consuming args
+    _explicit_env = None
+    for i, a in enumerate(sys.argv):
+        if a == "--env-file" and i + 1 < len(sys.argv):
+            _explicit_env = sys.argv[i + 1]
+        elif a.startswith("--env-file="):
+            _explicit_env = a.split("=", 1)[1]
+    if _explicit_env:
+        _load_dotenv(_explicit_env)
+
     parser = argparse.ArgumentParser(
         description="Standalone OpenRouter terminal agent with tool actions and context management."
     )
@@ -1088,7 +1146,14 @@ def main() -> None:
         action="store_true",
         help="Shortcut to auto-allow `discover` tool (equivalent to /allow discover).",
     )
+    parser.add_argument(
+        "--env-file",
+        help="Path to .env file to load (allowlisted keys only, no override).",
+    )
     args = parser.parse_args()
+    # If --env-file was passed and not already loaded via early peek (e.g. quoted), ensure loaded
+    if args.env_file and args.env_file != _explicit_env:
+        _load_dotenv(args.env_file)
 
     if not args.api_key:
         print(

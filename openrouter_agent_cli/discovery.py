@@ -14,9 +14,11 @@ with install hint instead of crashing.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import random
 import time
+import urllib.parse
 from typing import Any
 
 
@@ -63,24 +65,38 @@ def run_discover(
     if not target:
         return json.dumps({"error": "discover error: provide query (for search) or url (for navigate) or goal"})
 
+    # SSRF-safe validation for navigate
+    if kind == "navigate" and url:
+        try:
+            parsed = urllib.parse.urlparse(url.strip())
+            if parsed.scheme not in ("http", "https"):
+                return json.dumps({"error": f"discover error: navigate url must be http(s), got {parsed.scheme!r}"})
+            host = parsed.hostname or ""
+            # block localhost/private/link-local
+            try:
+                ip = ipaddress.ip_address(host)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return json.dumps({"error": f"discover error: navigate to private address blocked: {host}"})
+            except ValueError:
+                # hostname, not IP — block obvious local names
+                if host.lower() in ("localhost", "metadata.google.internal") or host.endswith(".internal"):
+                    return json.dumps({"error": f"discover error: navigate to {host} blocked"})
+        except Exception as e:
+            return json.dumps({"error": f"discover error: invalid url {url!r}: {e}"})
+
     # mock mode: deterministic, no network/binary
     if discovery_mode == "mock":
         data = _mock_result(kind, url or query, goal)
         return json.dumps(data, ensure_ascii=False)
 
-    # auto / real: try real browser, fall back to mock with hint if not installed
+    # auto / real: try real browser; auto no longer silently mocks (P1)
     if discovery_mode in ("auto", "real"):
         try:
             from unbrowser.smart import SmartClient  # type: ignore
         except ImportError as e:
-            if discovery_mode == "real":
-                return json.dumps({
-                    "error": f"discover error: pyunbrowser not installed ({e}). Install with `pip install \"openrouter-agent-cli[unbrowser]\"` or use discovery_mode=mock",
-                })
-            # auto -> mock fallback
-            data = _mock_result(kind, url or query, goal)
-            data["_note"] = "mock fallback: pyunbrowser not installed"
-            return json.dumps(data, ensure_ascii=False)
+            return json.dumps({
+                "error": f"discover error: pyunbrowser not installed ({e}). Install with `pip install \"openrouter-agent-cli[unbrowser]\"` or use --discovery mock for synthetic results",
+            })
 
         # real execution
         try:
