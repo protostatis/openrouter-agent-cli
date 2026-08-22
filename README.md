@@ -73,11 +73,12 @@ openrouter-agent --no-tools
 
 - `/help`
 - `/exit`
+- `/new [id]` (fresh session — history reset, isolates crypto contamination)
 - `/model [id]`
 - `/usage`
 - `/context [n]`
 - `/compact`
-- `/clear`
+- `/clear` (same id)
 - `/tools`
 - `/tools on|off`
 - `/allow <tool|*>`

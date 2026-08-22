@@ -8,6 +8,8 @@ import json
 import os
 import re
 import sys
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -381,11 +383,12 @@ class OpenRouterAgentCLI:
             print("Commands:")
             print("  /help                 Show help")
             print("  /exit                 Exit")
+            print("  /new [id]             New session (fresh history, like every harness)")
             print("  /model [id]           Show or set model")
             print("  /usage                Show message count + rough token estimate")
             print("  /context [n]          Show last n messages (default 8)")
             print("  /compact              Force conversation compaction")
-            print("  /clear                Clear session history")
+            print("  /clear                Clear session history (same id)")
             print("  /tools                Show tools + permission policy")
             print("  /tools on|off         Enable or disable tool calling")
             print("  /allow <tool|*>       Always allow tool")
@@ -444,6 +447,17 @@ class OpenRouterAgentCLI:
             self.messages = [{"role": "system", "content": self.system_prompt}]
             self._save_session()
             print("Session history cleared.")
+            return True
+
+        if cmd == "/new":
+            new_id = arg.strip() or f"session-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+            old_id = self.session_id
+            self.session_id = _sanitize_session_id(new_id)
+            self.messages = [{"role": "system", "content": self.system_prompt}]
+            # keep allow/deny policy? /new starts fresh but keeps it; uncomment to reset:
+            # self.policy = ToolPermissionPolicy()
+            self._save_session()
+            print(f"New session: {self.session_id} (was {old_id}) — history reset")
             return True
 
         if cmd == "/tools":
