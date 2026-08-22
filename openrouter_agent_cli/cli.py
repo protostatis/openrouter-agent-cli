@@ -49,9 +49,11 @@ Tool use:
 - discover: web search/navigate via browser (https only, private addresses blocked). This is a normal tool_call like run_bash.
   Agent fills it: discover(kind="search", query="...", goal="...") or discover(kind="navigate", url="...", goal="...").
   You fill query/url/goal yourself from the user task — no human prompt needed.
-  For any web/research task, decompose into 2-5 discover calls IN ONE PARALLEL RESPONSE (parallel tool calls) before answering.
-  Each discover runs concurrently (max_concurrency); shell/file tools are serialized. You invoke your own LLM again next turn to synthesize results.
-  The discover tool can invoke LLM extraction internally (navigate_auto with goal) — you don't need to fetch manually.
+  AGENT-DEFINED LIMITS (you decide, within caps):
+  - Per-batch discover calls: 1 to max_discover (default cap 5, you choose 2-5 based on task). For purchase/decision tasks, use diverse template: [search review] [navigate rtings/spec] [search vs comparison] [navigate wiki/history] [search complaints] — all in ONE parallel response.
+  - Rounds: 1 to max_rounds (default cap 2). If first batch is shallow or needs verification, emit a 2nd batch that deepens SAME topic (verify claims, official specs, contradictions) before final synthesis. You decide 1 vs 2 rounds from context and prior results.
+  - Concurrency cap: max_concurrency (default 5) limits parallel execution; shell/file tools always serialize even if mixed.
+  You invoke your own LLM again next turn to synthesize results. The discover tool can invoke LLM extraction internally (navigate_auto with goal) — you don't need to fetch manually.
 """
 
 DISCOVER_TOOL = {
@@ -59,11 +61,12 @@ DISCOVER_TOOL = {
     "function": {
         "name": "discover",
         "description": (
-            "Web discovery via pyunbrowser smart client (agent fills this tool_call itself). "
+            "Web discovery via pyunbrowser smart client (agent fills this tool_call itself, defines its own limits). "
             "Use kind='search' for a query (Brave search) or kind='navigate' for a specific URL (fetch + auto-discover with LLM extraction on goal). "
-            "Agent must fill query/url/goal from user task. For research, emit 2-5 discover calls IN THE SAME RESPONSE (parallel tool calls) to cover different angles. "
-            "Each call is independent and runs concurrently. The tool can invoke LLM internally for extraction; outer agent invokes its own LLM next turn to synthesize. "
-            "Prefer discover for web, run_bash for local; can mix both."
+            "Agent must fill query/url/goal from user task. For research, agent defines batch size 1..max_discover (cap 5) and emits that many IN THE SAME RESPONSE (parallel tool calls) to cover different angles — diverse template: search review, navigate specs, search vs, navigate wiki, search complaints. "
+            "Agent also defines rounds 1..max_rounds (cap 2): if shallow, emit 2nd batch deepening same topic before synth. "
+            "Each discover in a batch runs concurrently (cap max_concurrency). The tool can invoke LLM internally; outer agent invokes its own LLM next turn to synthesize. "
+            "Prefer discover for web, run_bash for local; can mix both but mixed batches serialize."
         ),
         "parameters": {
             "type": "object",
@@ -244,6 +247,8 @@ class OpenRouterAgentCLI:
         system_prompt: str,
         discovery_mode: str = "auto",
         max_concurrency: int = 5,
+        max_discover: int = 5,
+        max_rounds: int = 2,
     ):
         self.api_key = api_key
         self.model = model
@@ -256,6 +261,8 @@ class OpenRouterAgentCLI:
         self.system_prompt = system_prompt
         self.discovery_mode = discovery_mode  # auto|mock|real|off
         self.max_concurrency = max(1, min(16, max_concurrency))
+        self.max_discover = max(1, min(10, max_discover))
+        self.max_rounds = max(1, min(5, max_rounds))
         self.non_interactive_mode = False
         self.policy = ToolPermissionPolicy()
         self.one_shot_prompt: str | None = None
@@ -332,7 +339,7 @@ class OpenRouterAgentCLI:
             print(f"Model      : {self.model}")
             print(f"Session    : {self.session_id}")
             print(f"Working dir: {self.workdir}")
-            print(f"Discovery  : {self.discovery_mode} (max_concurrency={self.max_concurrency})")
+            print(f"Discovery  : {self.discovery_mode} (max_discover={self.max_discover}, max_rounds={self.max_rounds}, max_concurrency={self.max_concurrency}) [agent-defined within caps]")
             print("Type /help for commands. Type /exit to quit.")
             print()
 
@@ -388,6 +395,8 @@ class OpenRouterAgentCLI:
             print("  /cwd [path]           Show or set working directory")
             print("  /discovery [auto|mock|real|off]  Show or set discovery mode")
             print("  /concurrency [n]      Show or set max concurrent tool calls (1-16)")
+            print("  /max-discover [n]     Show or set cap for discover per batch (1-10, agent defines within)")
+            print("  /max-rounds [n]       Show or set cap for discover rounds (1-5, agent defines within)")
             return True
 
         if cmd == "/model":
@@ -512,7 +521,7 @@ class OpenRouterAgentCLI:
 
         if cmd == "/concurrency":
             if not arg:
-                print(f"Max concurrency: {self.max_concurrency}")
+                print(f"Max concurrency: {self.max_concurrency} (agent-defined within cap)")
                 return True
             try:
                 n = int(arg)
@@ -520,6 +529,30 @@ class OpenRouterAgentCLI:
                 print(f"Max concurrency set to: {self.max_concurrency}")
             except ValueError:
                 print("Usage: /concurrency [n]  (1-16)")
+            return True
+
+        if cmd == "/max-discover":
+            if not arg:
+                print(f"Max discover per batch: {self.max_discover} (agent defines 1..cap)")
+                return True
+            try:
+                n = int(arg)
+                self.max_discover = max(1, min(10, n))
+                print(f"Max discover per batch set to: {self.max_discover}")
+            except ValueError:
+                print("Usage: /max-discover [n]  (1-10)")
+            return True
+
+        if cmd == "/max-rounds":
+            if not arg:
+                print(f"Max rounds: {self.max_rounds} (agent defines 1..cap)")
+                return True
+            try:
+                n = int(arg)
+                self.max_rounds = max(1, min(5, n))
+                print(f"Max rounds set to: {self.max_rounds}")
+            except ValueError:
+                print("Usage: /max-rounds [n]  (1-5)")
             return True
 
         print(f"Unknown command: {cmd}. Use /help.")
@@ -996,6 +1029,8 @@ _ENV_ALLOWLIST = {
     "OPENROUTER_MODEL",
     "OPENROUTER_AGENT_DISCOVERY",
     "OPENROUTER_AGENT_MAX_CONCURRENCY",
+    "OPENROUTER_AGENT_MAX_DISCOVER",
+    "OPENROUTER_AGENT_MAX_ROUNDS",
     "OPENROUTER_AGENT_REFERER",
     "OPENROUTER_AGENT_TITLE",
     "OPENROUTER_AGENT_SESSION_DIR",
@@ -1139,7 +1174,19 @@ def main() -> None:
         "--max-concurrency",
         type=int,
         default=int(os.environ.get("OPENROUTER_AGENT_MAX_CONCURRENCY", "5")),
-        help="Max concurrent tool calls when model emits parallel tool_calls (1=serial, 5 default, max 16).",
+        help="Max concurrent discover when agent batches (cap, agent defines within 1..cap, default 5, max 16).",
+    )
+    parser.add_argument(
+        "--max-discover",
+        type=int,
+        default=int(os.environ.get("OPENROUTER_AGENT_MAX_DISCOVER", "5")),
+        help="Cap for discover calls per batch (agent defines 1..cap, default 5, max 10).",
+    )
+    parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=int(os.environ.get("OPENROUTER_AGENT_MAX_ROUNDS", "2")),
+        help="Cap for discover rounds (agent defines 1..cap, default 2, max 5).",
     )
     parser.add_argument(
         "--allow-discovery",
@@ -1168,6 +1215,10 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(1)
 
+    # Inject agent-defined caps into prompt so model sees actual limits (not just defaults)
+    if "AGENT-DEFINED LIMITS" in system_prompt:
+        system_prompt += f"\n[Caps for this session: max_discover={args.max_discover} per batch, max_rounds={args.max_rounds}, max_concurrency={args.max_concurrency} — you define within caps]\n"
+
     cli = OpenRouterAgentCLI(
         api_key=args.api_key,
         model=args.model,
@@ -1180,6 +1231,8 @@ def main() -> None:
         system_prompt=system_prompt,
         discovery_mode=args.discovery,
         max_concurrency=args.max_concurrency,
+        max_discover=args.max_discover,
+        max_rounds=args.max_rounds,
     )
     if args.allow_discovery:
         cli.policy.allow.add("discover")
