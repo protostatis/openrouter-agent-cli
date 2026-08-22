@@ -280,6 +280,8 @@ class OpenRouterAgentCLI:
             )
         ).expanduser()
         self.session_root.mkdir(parents=True, exist_ok=True)
+        self._policy_path = self.session_root.parent / "policy.json"
+        self._load_policy()
         self.messages = self._load_session()
 
     def _log(self, message: str, *, end: str = "\n") -> None:
@@ -325,6 +327,27 @@ class OpenRouterAgentCLI:
             self._session_path.write_text(json.dumps(payload))
         except Exception as e:
             print(f"[session] Failed to save session: {e}")
+
+    def _load_policy(self) -> None:
+        try:
+            data = json.loads(self._policy_path.read_text())
+            allow = data.get("allow", [])
+            deny = data.get("deny", [])
+            if isinstance(allow, list):
+                self.policy.allow = set(str(x) for x in allow if isinstance(x, str))
+            if isinstance(deny, list):
+                self.policy.deny = set(str(x) for x in deny if isinstance(x, str))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[policy] Failed to load policy: {e}", file=sys.stderr)
+
+    def _save_policy(self) -> None:
+        try:
+            payload = {"allow": sorted(self.policy.allow), "deny": sorted(self.policy.deny)}
+            self._policy_path.write_text(json.dumps(payload, indent=2))
+        except Exception as e:
+            print(f"[policy] Failed to save policy: {e}", file=sys.stderr)
 
     def _tool_names(self) -> list[str]:
         names: list[str] = []
@@ -482,7 +505,8 @@ class OpenRouterAgentCLI:
                 return True
             self.policy.allow.add(arg)
             self.policy.deny.discard(arg)
-            print(f"Always allow: {arg}")
+            self._save_policy()
+            print(f"Always allow: {arg} (cached across sessions)")
             return True
 
         if cmd == "/deny":
@@ -491,7 +515,8 @@ class OpenRouterAgentCLI:
                 return True
             self.policy.deny.add(arg)
             self.policy.allow.discard(arg)
-            print(f"Always deny: {arg}")
+            self._save_policy()
+            print(f"Always deny: {arg} (cached across sessions)")
             return True
 
         if cmd == "/unallow":
@@ -499,6 +524,7 @@ class OpenRouterAgentCLI:
                 print("Usage: /unallow <tool_name|*>")
                 return True
             self.policy.allow.discard(arg)
+            self._save_policy()
             print(f"Removed allow rule: {arg}")
             return True
 
@@ -507,6 +533,7 @@ class OpenRouterAgentCLI:
                 print("Usage: /undeny <tool_name|*>")
                 return True
             self.policy.deny.discard(arg)
+            self._save_policy()
             print(f"Removed deny rule: {arg}")
             return True
 
@@ -681,10 +708,12 @@ class OpenRouterAgentCLI:
         if choice == "a":
             self.policy.allow.add(tool_name)
             self.policy.deny.discard(tool_name)
+            self._save_policy()
             return True
         if choice == "d":
             self.policy.deny.add(tool_name)
             self.policy.allow.discard(tool_name)
+            self._save_policy()
             return False
         return choice in ("y", "yes")
 
@@ -1229,6 +1258,13 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(1)
 
+    # Default to fresh session for -p (one-shot) when --session-id not explicitly given
+    # Prevents crypto-contamination via shared default.json (50-msg pollution)
+    _session_explicit = any(a.startswith("--session-id") for a in sys.argv)
+    if args.prompt is not None and not _session_explicit and args.session_id == DEFAULT_SESSION_ID:
+        args.session_id = f"ephemeral-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+        print(f"[session] one-shot fresh session: {args.session_id} (use --session-id to persist)", file=sys.stderr)
+
     # Inject agent-defined caps into prompt so model sees actual limits (not just defaults)
     if "AGENT-DEFINED LIMITS" in system_prompt:
         system_prompt += f"\n[Caps for this session: max_discover={args.max_discover} per batch, max_rounds={args.max_rounds}, max_concurrency={args.max_concurrency} — you define within caps]\n"
@@ -1250,6 +1286,8 @@ def main() -> None:
     )
     if args.allow_discovery:
         cli.policy.allow.add("discover")
+        cli.policy.deny.discard("discover")
+        cli._save_policy()
 
     if args.prompt is not None:
         cli.one_shot_prompt = args.prompt

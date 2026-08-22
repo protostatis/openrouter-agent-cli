@@ -81,8 +81,8 @@ openrouter-agent --no-tools
 - `/clear` (same id)
 - `/tools`
 - `/tools on|off`
-- `/allow <tool|*>`
-- `/deny <tool|*>`
+- `/allow <tool|*>` (cached across sessions → `~/.openrouter-agent-cli/policy.json`)
+- `/deny <tool|*>` (cached)
 - `/unallow <tool|*>`
 - `/undeny <tool|*>`
 - `/cwd [path]`
