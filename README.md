@@ -43,7 +43,7 @@ openrouter-agent --prompt "Explain tail recursion" --no-tools
 
 ```bash
 openrouter-agent \
-  --model arcee-ai/trinity-large-preview:free \
+  --model nvidia/nemotron-3.5-lightning:free \
   --session-id my-session \
   --workdir ~/Projects \
   --max-turns 24 \
@@ -87,7 +87,7 @@ openrouter-agent --no-tools
 - Model outputs (tool calls) are reflected literally in `run_bash`, so treat every allowed tool call as untrusted input and keep the allow/deny policy enforced unless you deliberately want to run everything.
 - default policy is `ask` for every tool call
 - use `/deny *` for a fully no-tools session
-- default model is free-tier (`arcee-ai/trinity-large-preview:free`); override with `--model` or `OPENROUTER_MODEL`
+- default model is free-tier (`nvidia/nemotron-3.5-lightning:free`); override with `--model` or `OPENROUTER_MODEL`
 
 ## Tool schema seen by the model
 
@@ -124,7 +124,7 @@ Request body shape sent to OpenRouter (simplified):
 
 ```json
 {
-  "model": "arcee-ai/trinity-large-preview:free",
+  "model": "nvidia/nemotron-3.5-lightning:free",
   "messages": [...],
   "temperature": 0,
   "max_tokens": 4096,
@@ -201,7 +201,7 @@ Run prompt-only comparison (no tools):
 export OPENROUTER_API_KEY=sk-or-...
 python scripts/ab_test_system_prompts.py \
   --tool-mode none \
-  --model arcee-ai/trinity-large-preview:free
+  --model nvidia/nemotron-3.5-lightning:free
 ```
 
 Run with tool execution enabled (use cautiously):
@@ -211,7 +211,7 @@ export OPENROUTER_API_KEY=sk-or-...
 python scripts/ab_test_system_prompts.py \
   --tool-mode execute \
   --workdir "$(pwd)" \
-  --model arcee-ai/trinity-large-preview:free
+  --model nvidia/nemotron-3.5-lightning:free
 ```
 
 Artifacts are written to `ab_tests/results/<timestamp>/`:
@@ -233,7 +233,7 @@ python scripts/ab_test_system_prompts.py \
   --request-timeout 40 \
   --command-timeout 20 \
   --workdir "$(pwd)" \
-  --model arcee-ai/trinity-large-preview:free \
+  --model nvidia/nemotron-3.5-lightning:free \
   --output-dir ab_tests/results/hard_suite_v1_r3
 ```
 
@@ -243,7 +243,7 @@ Evaluate quality and groundedness from a run:
 export OPENROUTER_API_KEY=sk-or-...
 python scripts/evaluate_ab_results.py \
   --results ab_tests/results/hard_suite_v1_r3/results.json \
-  --judge-model arcee-ai/trinity-large-preview:free \
+  --judge-model nvidia/nemotron-3.5-lightning:free \
   --output-dir ab_tests/results/hard_suite_v1_r3/eval
 ```
 

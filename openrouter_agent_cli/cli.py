@@ -21,8 +21,13 @@ from openrouter_agent_cli.utils import (
     run_bash,
 )
 
+try:
+    from openrouter_agent_cli.discovery import run_discover
+except ImportError:  # pragma: no cover
+    run_discover = None  # type: ignore
+
 # Default to a free-tier model so first-run usage does not consume paid credits.
-DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
+DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning:free"
 DEFAULT_SESSION_ID = "default"
 DEFAULT_MAX_TURNS = 24
 DEFAULT_MAX_HISTORY_MESSAGES = 60
@@ -31,7 +36,42 @@ CONTEXT_KEEP_TAIL = 10
 
 DEFAULT_SYSTEM_PROMPT = """You are a pragmatic coding assistant in a terminal.
 Use tools only when needed. Explain outputs clearly and stay concise.
-When unsure, ask for clarification before destructive operations."""
+When unsure, ask for clarification before destructive operations.
+
+Tool use:
+- run_bash: local shell (cwd = workdir). Use for files, git, tests, builds.
+- read_file/write_file/edit_file: workdir-jail file ops.
+- discover: web search/navigate via browser. This is a normal tool_call like run_bash.
+  Agent fills it: discover(kind="search", query="...", goal="...") or discover(kind="navigate", url="...", goal="...").
+  You fill query/url/goal yourself from the user task — no human prompt needed.
+  For any web/research task, decompose into 2-5 discover calls IN ONE PARALLEL RESPONSE (parallel tool calls) before answering.
+  Each call runs concurrently (max_concurrency). Use discover for web, run_bash for local. You can mix both in one turn and you invoke your own LLM again next turn to synthesize results.
+  The discover tool itself can invoke LLM extraction internally (navigate_auto with goal) — you don't need to fetch manually.
+"""
+
+DISCOVER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "discover",
+        "description": (
+            "Web discovery via pyunbrowser smart client (agent fills this tool_call itself). "
+            "Use kind='search' for a query (Brave search) or kind='navigate' for a specific URL (fetch + auto-discover with LLM extraction on goal). "
+            "Agent must fill query/url/goal from user task. For research, emit 2-5 discover calls IN THE SAME RESPONSE (parallel tool calls) to cover different angles. "
+            "Each call is independent and runs concurrently. The tool can invoke LLM internally for extraction; outer agent invokes its own LLM next turn to synthesize. "
+            "Prefer discover for web, run_bash for local; can mix both."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["search", "navigate"], "description": "search=query, navigate=URL"},
+                "query": {"type": "string", "description": "Search query (for kind=search)."},
+                "url": {"type": "string", "description": "URL to fetch + auto-discover (for kind=navigate)."},
+                "goal": {"type": "string", "description": "What this objective should surface / why it matters."},
+            },
+            "required": ["kind", "goal"],
+        },
+    },
+}
 
 TOOLS = [
     {
@@ -139,6 +179,7 @@ TOOLS = [
             },
         },
     },
+    DISCOVER_TOOL,
 ]
 
 
@@ -196,6 +237,8 @@ class OpenRouterAgentCLI:
         command_timeout: int,
         tools_enabled: bool,
         system_prompt: str,
+        discovery_mode: str = "auto",
+        max_concurrency: int = 5,
     ):
         self.api_key = api_key
         self.model = model
@@ -206,6 +249,8 @@ class OpenRouterAgentCLI:
         self.command_timeout = min(max(1, command_timeout), 600)
         self.tools_enabled = tools_enabled
         self.system_prompt = system_prompt
+        self.discovery_mode = discovery_mode  # auto|mock|real|off
+        self.max_concurrency = max(1, min(16, max_concurrency))
         self.non_interactive_mode = False
         self.policy = ToolPermissionPolicy()
         self.one_shot_prompt: str | None = None
@@ -282,6 +327,7 @@ class OpenRouterAgentCLI:
             print(f"Model      : {self.model}")
             print(f"Session    : {self.session_id}")
             print(f"Working dir: {self.workdir}")
+            print(f"Discovery  : {self.discovery_mode} (max_concurrency={self.max_concurrency})")
             print("Type /help for commands. Type /exit to quit.")
             print()
 
@@ -335,6 +381,8 @@ class OpenRouterAgentCLI:
             print("  /unallow <tool|*>     Remove allow rule")
             print("  /undeny <tool|*>      Remove deny rule")
             print("  /cwd [path]           Show or set working directory")
+            print("  /discovery [auto|mock|real|off]  Show or set discovery mode")
+            print("  /concurrency [n]      Show or set max concurrent tool calls (1-16)")
             return True
 
         if cmd == "/model":
@@ -446,6 +494,29 @@ class OpenRouterAgentCLI:
             print(f"Working directory set to: {self.workdir}")
             return True
 
+        if cmd == "/discovery":
+            if not arg:
+                print(f"Discovery mode: {self.discovery_mode}")
+                return True
+            if arg not in ("auto", "mock", "real", "off"):
+                print("Usage: /discovery [auto|mock|real|off]")
+                return True
+            self.discovery_mode = arg
+            print(f"Discovery mode set to: {self.discovery_mode}")
+            return True
+
+        if cmd == "/concurrency":
+            if not arg:
+                print(f"Max concurrency: {self.max_concurrency}")
+                return True
+            try:
+                n = int(arg)
+                self.max_concurrency = max(1, min(16, n))
+                print(f"Max concurrency set to: {self.max_concurrency}")
+            except ValueError:
+                print("Usage: /concurrency [n]  (1-16)")
+            return True
+
         print(f"Unknown command: {cmd}. Use /help.")
         return True
 
@@ -455,10 +526,15 @@ class OpenRouterAgentCLI:
         messages: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
-        tools = TOOLS if self.tools_enabled and tool_choice != "none" else None
+        if self.discovery_mode == "off":
+            tools = [t for t in TOOLS if t["function"]["name"] != "discover"] if self.tools_enabled and tool_choice != "none" else None
+        else:
+            tools = TOOLS if self.tools_enabled and tool_choice != "none" else None
         effective_tool_choice = (
             "none" if tool_choice == "none" or not self.tools_enabled else "auto"
         )
+        # Enable parallel tool calls when discovery batching is available
+        parallel = True if (self.discovery_mode != "off" and self.tools_enabled and tool_choice != "none") else None
         data = await call_openrouter(
             client,
             api_key=self.api_key,
@@ -467,6 +543,7 @@ class OpenRouterAgentCLI:
             max_tokens=4096,
             tool_choice=effective_tool_choice,
             tools=tools,
+            parallel_tool_calls=parallel,
         )
 
         usage = data.get("usage") or {}
@@ -658,6 +735,23 @@ class OpenRouterAgentCLI:
     async def _run_bash(self, command: str, timeout_seconds: int) -> str:
         return await run_bash(command, self.workdir, timeout_seconds)
 
+    async def _discover(self, args: dict[str, Any]) -> str:
+        if self.discovery_mode == "off":
+            return "discover error: discovery is disabled (use --discovery auto|mock|real)"
+        if run_discover is None:
+            return "discover error: discovery module not available"
+        # run_discover is blocking (may do time.sleep or SmartClient I/O) -> thread
+        return await asyncio.to_thread(
+            run_discover,
+            str(args.get("kind", "search")),
+            str(args.get("query", "")),
+            str(args.get("url", "")),
+            str(args.get("goal", "")),
+            discovery_mode=self.discovery_mode,
+            brave_api_key=os.environ.get("BRAVE_API_KEY"),
+            binary=os.environ.get("UNBROWSER_BINARY"),
+        )
+
     async def _execute_tool(self, tool_name: str, args: dict[str, Any]) -> str:
         if not self.tools_enabled:
             return f"Tool blocked: tools are disabled. Requested '{tool_name}'."
@@ -716,6 +810,19 @@ class OpenRouterAgentCLI:
             if not old_str:
                 return "edit_file error: 'old_string' is required."
             return await self._edit_file(file_path, old_str, new_str)
+
+        if tool_name == "discover":
+            kind = str(args.get("kind", "")).strip()
+            goal = str(args.get("goal", "")).strip()
+            if not kind:
+                return "discover error: 'kind' is required (search|navigate)"
+            if not goal:
+                return "discover error: 'goal' is required"
+            if kind == "search" and not str(args.get("query", "")).strip() and not goal:
+                return "discover error: 'query' is required for kind=search"
+            if kind == "navigate" and not str(args.get("url", "")).strip():
+                return "discover error: 'url' is required for kind=navigate"
+            return await self._discover(args)
 
         return f"Unknown tool: {tool_name}"
 
@@ -801,34 +908,100 @@ class OpenRouterAgentCLI:
                 self._save_session()
                 return text
 
-            tool_results = []
-            for idx, tool_call in enumerate(tool_calls):
-                fn = tool_call.get("function", {})
+            # Decode args first (preserve canonical JSON for log/replay)
+            parsed_calls: list[tuple[str, dict[str, Any], str, dict]] = []
+            for idx, tc in enumerate(tool_calls):
+                fn = tc.get("function", {}) or {}
                 tool_name = str(fn.get("name", "")).strip()
                 tool_args = _decode_tool_arguments(fn.get("arguments"))
                 fn["arguments"] = json.dumps(tool_args, separators=(",", ":"))
+                tool_call_id = tc.get("id") or f"tc-{turn + 1}-{idx + 1}"
+                parsed_calls.append((tool_name, tool_args, tool_call_id, tc))
 
-                self._log(
-                    f"[tool] {tool_name}({_truncate(json.dumps(tool_args), 140)})"
-                )
-                result = await self._execute_tool(tool_name, tool_args)
-                preview = _truncate(result.replace("\n", " "), 220)
-                self._log(f"[tool-result] {preview}")
+            # Decide execution strategy: concurrent when batch is safe
+            # - Single call -> sequential (no overhead)
+            # - Multiple discover/run_bash -> concurrent if all decisions are not "ask" needing prompt
+            can_concurrent = False
+            if len(parsed_calls) > 1:
+                # Check permission without prompting: if any is "deny" we still handle, but "ask" in interactive mode would require prompt
+                ask_needed = False
+                for tname, _, _, _ in parsed_calls:
+                    dec = self.policy.decision(tname)
+                    if dec == "ask" and not self.non_interactive_mode:
+                        ask_needed = True
+                        break
+                # Non-interactive ask -> auto-deny fast path, so we can concurrent (all will be denied immediately)
+                # Interactive ask -> must prompt sequentially, so fall back
+                if not ask_needed or self.non_interactive_mode:
+                    can_concurrent = True
+                # Also limit concurrency for file tools (write/edit) – keep sequential to avoid races
+                has_file_write = any(n in ("write_file", "edit_file") for n, _, _, _ in parsed_calls)
+                if has_file_write:
+                    can_concurrent = False
 
-                tool_call_id = tool_call.get("id") or f"tc-{turn + 1}-{idx + 1}"
-                tool_results.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": result[:8000],
-                    }
-                )
+            tool_results = []
+            if can_concurrent and self.max_concurrency > 1:
+                # Log all calls upfront
+                for tname, targs, _, _ in parsed_calls:
+                    self._log(f"[tool] {tname}({_truncate(json.dumps(targs), 140)})")
+                self._log(f"[executor] dispatching {len(parsed_calls)} call(s) concurrently (cap={self.max_concurrency})")
+
+                async def _handler(name: str, args: dict[str, Any]) -> str:
+                    return await self._execute_tool(name, args)
+
+                # Use semaphore-gated gather (preserves input order)
+                sem = asyncio.Semaphore(self.max_concurrency)
+
+                async def _gated(name: str, args: dict[str, Any]) -> str:
+                    async with sem:
+                        return await _handler(name, args)
+
+                results = await asyncio.gather(*[_gated(n, a) for n, a, _, _ in parsed_calls])
+                for (_, _, tcid, _), res in zip(parsed_calls, results):
+                    preview = _truncate(res.replace("\n", " "), 220)
+                    self._log(f"[tool-result] {preview}")
+                    tool_results.append({"role": "tool", "tool_call_id": tcid, "content": res[:8000]})
+            else:
+                for tname, targs, tcid, _ in parsed_calls:
+                    self._log(f"[tool] {tname}({_truncate(json.dumps(targs), 140)})")
+                    res = await self._execute_tool(tname, targs)
+                    preview = _truncate(res.replace("\n", " "), 220)
+                    self._log(f"[tool-result] {preview}")
+                    tool_results.append({"role": "tool", "tool_call_id": tcid, "content": res[:8000]})
 
             self.messages.extend(tool_results)
 
         self._log("[agent] Reached max turns for this user message.")
         self._save_session()
         return ""
+
+
+def _load_dotenv() -> None:
+    """Load .env from cwd and repo root without requiring python-dotenv."""
+    # Prefer python-dotenv if installed (handles quotes, export, etc.)
+    try:
+        from dotenv import load_dotenv  # type: ignore
+
+        load_dotenv(override=False)
+        return
+    except ImportError:
+        pass
+    # Minimal fallback: parse key=value lines, don't override existing env
+    for env_path in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+        if not env_path.is_file():
+            continue
+        try:
+            for line in env_path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        except Exception:
+            continue
 
 
 def _load_system_prompt(path: str | None) -> str:
@@ -842,6 +1015,7 @@ def _load_system_prompt(path: str | None) -> str:
 
 
 def main() -> None:
+    _load_dotenv()
     parser = argparse.ArgumentParser(
         description="Standalone OpenRouter terminal agent with tool actions and context management."
     )
@@ -897,6 +1071,23 @@ def main() -> None:
         "-p",
         help="Run a single prompt, emit the assistant reply on stdout, and exit.",
     )
+    parser.add_argument(
+        "--discovery",
+        choices=["auto", "mock", "real", "off"],
+        default=os.environ.get("OPENROUTER_AGENT_DISCOVERY", "auto"),
+        help="Web discovery mode for `discover` tool: auto (real if pyunbrowser installed else mock), mock (no network), real (requires pyunbrowser), off (disable tool) (default: auto).",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=int(os.environ.get("OPENROUTER_AGENT_MAX_CONCURRENCY", "5")),
+        help="Max concurrent tool calls when model emits parallel tool_calls (1=serial, 5 default, max 16).",
+    )
+    parser.add_argument(
+        "--allow-discovery",
+        action="store_true",
+        help="Shortcut to auto-allow `discover` tool (equivalent to /allow discover).",
+    )
     args = parser.parse_args()
 
     if not args.api_key:
@@ -922,7 +1113,11 @@ def main() -> None:
         command_timeout=args.command_timeout,
         tools_enabled=not args.no_tools,
         system_prompt=system_prompt,
+        discovery_mode=args.discovery,
+        max_concurrency=args.max_concurrency,
     )
+    if args.allow_discovery:
+        cli.policy.allow.add("discover")
 
     if args.prompt is not None:
         cli.one_shot_prompt = args.prompt

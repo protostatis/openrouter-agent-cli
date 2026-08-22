@@ -74,6 +74,7 @@ async def call_openrouter(
     tool_choice: str = "auto",
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0,
+    parallel_tool_calls: bool | None = None,
 ) -> dict[str, Any]:
     """Make a request to the OpenRouter API."""
     body: dict[str, Any] = {
@@ -87,6 +88,8 @@ async def call_openrouter(
     else:
         body["tools"] = tools
         body["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            body["parallel_tool_calls"] = parallel_tool_calls
 
     headers = {
         "Authorization": f"Bearer {api_key}",
