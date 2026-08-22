@@ -13,9 +13,9 @@ Standalone terminal agent for OpenRouter models with:
 cd openrouter-agent-cli
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .                    # core (httpx only)
-pip install -e ".[unbrowser]"       # + real web discovery (pyunbrowser, brave search)
+pip install -e .                    # core includes pyunbrowser (real web discovery)
 pip install -e ".[viz]"             # + png gantt (matplotlib)
+pip install -e ".[full]"            # all extras (openai, dotenv, viz)
 ```
 
 ## Run
