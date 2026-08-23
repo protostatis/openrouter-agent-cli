@@ -24,6 +24,11 @@ except ImportError:  # pragma: no cover
     Console = None  # type: ignore
     Markdown = None  # type: ignore
 
+try:
+    from prompt_toolkit import PromptSession
+except ImportError:  # pragma: no cover
+    PromptSession = None  # type: ignore
+
 from openrouter_agent_cli.utils import (
     OPENROUTER_URL,
     _decode_tool_arguments,
@@ -413,9 +418,21 @@ class OpenRouterAgentCLI:
                 await self._run_user_turn(client, self.one_shot_prompt)
                 return
 
+            # prompt_toolkit handles bracketed paste: pasted multi-line text
+            # stays in the buffer (newlines literal) until Enter is pressed.
+            pmtk_session = None
+            if PromptSession is not None and sys.stdin.isatty():
+                try:
+                    pmtk_session = PromptSession()
+                except Exception:
+                    pmtk_session = None
+
             while True:
                 try:
-                    user_text = await asyncio.to_thread(input, "you> ")
+                    if pmtk_session is not None:
+                        user_text = await pmtk_session.prompt_async("you> ")
+                    else:
+                        user_text = await asyncio.to_thread(input, "you> ")
                 except (EOFError, KeyboardInterrupt):
                     print("\nExiting.")
                     break
