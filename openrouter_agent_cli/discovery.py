@@ -69,8 +69,8 @@ def run_discover(
     if kind == "navigate" and url:
         try:
             parsed = urllib.parse.urlparse(url.strip())
-            if parsed.scheme not in ("http", "https"):
-                return json.dumps({"error": f"discover error: navigate url must be http(s), got {parsed.scheme!r}"})
+            if parsed.scheme != "https":
+                return json.dumps({"error": f"discover error: navigate url must be https, got {parsed.scheme!r}"})
             host = parsed.hostname or ""
             # block localhost/private/link-local
             try:

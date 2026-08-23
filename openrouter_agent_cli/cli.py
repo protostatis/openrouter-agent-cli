@@ -321,7 +321,30 @@ class OpenRouterAgentCLI:
     def _save_session(self):
         non_system = [m for m in self.messages if m.get("role") != "system"]
         if len(non_system) > self.max_history_messages:
-            non_system = non_system[-self.max_history_messages :]
+            # Preserve tool-call groups: don't slice between assistant tool_calls and its tool results
+            trimmed = non_system[-self.max_history_messages :]
+            # If we cut into a tool group, expand backward to include the assistant
+            if trimmed and trimmed[0].get("role") == "tool":
+                idx = len(non_system) - len(trimmed) - 1
+                while idx >= 0 and non_system[idx].get("role") == "tool":
+                    idx -= 1
+                if idx >= 0 and non_system[idx].get("role") == "assistant" and non_system[idx].get("tool_calls"):
+                    # include this assistant and any preceding tools already in trimmed logic
+                    trimmed = non_system[idx:]
+                    # re-trim to limit but preserve groups: if still too long, drop from front in whole groups
+                    while len(trimmed) > self.max_history_messages:
+                        # drop first complete group (user/assistant+tools)
+                        if trimmed[0].get("role") == "tool":
+                            trimmed = trimmed[1:]
+                        elif trimmed[0].get("role") == "assistant" and trimmed[0].get("tool_calls"):
+                            # drop assistant plus its tool results
+                            j = 1
+                            while j < len(trimmed) and trimmed[j].get("role") == "tool":
+                                j += 1
+                            trimmed = trimmed[j:]
+                        else:
+                            trimmed = trimmed[1:]
+            non_system = trimmed
         payload = {"messages": non_system, "system_prompt": self.system_prompt}
         try:
             self._session_path.write_text(json.dumps(payload))
@@ -644,8 +667,20 @@ class OpenRouterAgentCLI:
         if len(non_system) <= CONTEXT_KEEP_TAIL + 2:
             return False
 
-        older = non_system[:-CONTEXT_KEEP_TAIL]
+        # Preserve tool-call groups in tail
         tail = non_system[-CONTEXT_KEEP_TAIL:]
+        if tail and tail[0].get("role") == "tool":
+            idx = len(non_system) - len(tail) - 1
+            while idx >= 0 and non_system[idx].get("role") == "tool":
+                idx -= 1
+            if idx >= 0 and non_system[idx].get("role") == "assistant" and non_system[idx].get("tool_calls"):
+                tail = non_system[idx:]
+                older = non_system[:idx]
+            else:
+                # keep original split if no assistant found
+                older = non_system[:-CONTEXT_KEEP_TAIL]
+        else:
+            older = non_system[:-CONTEXT_KEEP_TAIL]
 
         transcript_lines = []
         for msg in older[-80:]:
@@ -917,6 +952,7 @@ class OpenRouterAgentCLI:
         self.messages.append({"role": "user", "content": user_text})
         last_tool_signature: str | None = None
         repeated_count = 0
+        discover_rounds = 0
 
         for turn in range(self.max_turns):
             try:
@@ -1005,6 +1041,21 @@ class OpenRouterAgentCLI:
                 tool_call_id = tc.get("id") or f"tc-{turn + 1}-{idx + 1}"
                 parsed_calls.append((tool_name, tool_args, tool_call_id, tc))
 
+            # Enforce agent-defined caps (max_discover per batch + max_rounds)
+            if len(parsed_calls) > self.max_discover:
+                self._log(f"[policy] batch {len(parsed_calls)} > max_discover={self.max_discover}, truncating to {self.max_discover}")
+                parsed_calls = parsed_calls[: self.max_discover]
+            is_discover_batch = any(n == "discover" for n, _, _, _ in parsed_calls)
+            if is_discover_batch:
+                discover_rounds += 1
+                if discover_rounds > self.max_rounds:
+                    self._log(f"[policy] discover rounds {discover_rounds} > max_rounds={self.max_rounds}, denying batch")
+                    tool_results = []
+                    for _, _, tcid, _ in parsed_calls:
+                        tool_results.append({"role": "tool", "tool_call_id": tcid, "content": f"discover error: max_rounds {self.max_rounds} exceeded (round {discover_rounds})"})
+                    self.messages.extend(tool_results)
+                    continue
+
             # Decide execution strategy: concurrent only for pure discover batches (P1)
             can_concurrent = False
             if len(parsed_calls) > 1 and all(n == "discover" for n, _, _, _ in parsed_calls):
@@ -1080,11 +1131,14 @@ _ENV_ALLOWLIST = {
     "BRAVE_API_KEY",
     "UNBROWSER_BINARY",
 }
+_ENV_SENSITIVE = {"UNBROWSER_BINARY", "OPENROUTER_AGENT_SESSION_DIR"}
+_ENV_AUTO_ALLOWLIST = _ENV_ALLOWLIST - _ENV_SENSITIVE
 
 
 def _load_dotenv(env_file: str | None = None) -> None:
-    """Load .env from explicit file or cwd/repo root, allowlisted keys only."""
-    # Explicit --env-file takes precedence
+    """Load .env allowlisted keys only. Auto-load excludes sensitive executable vars."""
+    is_explicit = env_file is not None
+    allow = _ENV_ALLOWLIST if is_explicit else _ENV_AUTO_ALLOWLIST
     candidates: list[Path] = []
     if env_file:
         candidates.append(Path(env_file).expanduser())
@@ -1100,7 +1154,9 @@ def _load_dotenv(env_file: str | None = None) -> None:
                 continue
             try:
                 for k, v in dotenv_values(p).items():
-                    if k in _ENV_ALLOWLIST and k not in os.environ and v is not None:
+                    if k not in allow or v is None:
+                        continue
+                    if is_explicit or k not in os.environ:
                         os.environ[k] = v
             except Exception:
                 continue
@@ -1116,12 +1172,11 @@ def _load_dotenv(env_file: str | None = None) -> None:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
-                # handle optional leading "export "
                 if line.startswith("export "):
                     line = line[7:].strip()
                 k, v = line.split("=", 1)
                 k = k.strip()
-                if k not in _ENV_ALLOWLIST or k in os.environ:
+                if k not in allow or (not is_explicit and k in os.environ):
                     continue
                 v = v.strip().strip('"').strip("'")
                 os.environ[k] = v
@@ -1211,7 +1266,7 @@ def main() -> None:
         "--discovery",
         choices=["auto", "mock", "real", "off"],
         default=os.environ.get("OPENROUTER_AGENT_DISCOVERY", "auto"),
-        help="Web discovery mode for `discover` tool: auto (real if pyunbrowser installed else mock), mock (no network), real (requires pyunbrowser), off (disable tool) (default: auto).",
+        help="Web discovery mode for `discover` tool: auto (requires pyunbrowser, errors if missing), mock (synthetic example.com), real (requires pyunbrowser), off (disable tool) (default: auto).",
     )
     parser.add_argument(
         "--max-concurrency",
