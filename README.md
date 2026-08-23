@@ -6,8 +6,16 @@ Standalone terminal agent for OpenRouter models with:
 - session persistence
 - context visibility and compaction
 - concurrent `discover` batching (parallel tool calls → `max_concurrency`)
+- Markdown-rendered assistant replies and multi-line paste support in the REPL
 
 ## Install
+
+```bash
+pip install openrouter-agent-cli          # from PyPI
+pipx install openrouter-agent-cli         # or isolated CLI install
+```
+
+Or from a source checkout:
 
 ```bash
 cd openrouter-agent-cli
@@ -17,6 +25,10 @@ pip install -e .                    # core includes pyunbrowser (real web discov
 pip install -e ".[viz]"             # + png gantt (matplotlib)
 pip install -e ".[full]"            # all extras (openai, dotenv, viz)
 ```
+
+Note: real web discovery depends on `pyunbrowser`, which currently ships
+Linux/macOS wheels — on Windows the rest of the CLI works, but `discover`
+may be unavailable.
 
 ## Run
 

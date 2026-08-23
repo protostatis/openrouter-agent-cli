@@ -17,6 +17,26 @@ from typing import Any
 
 import httpx
 
+try:
+    from rich.console import Console
+    from rich.markdown import Markdown
+except ImportError:  # pragma: no cover
+    Console = None  # type: ignore
+    Markdown = None  # type: ignore
+
+try:
+    from prompt_toolkit import PromptSession
+except ImportError:  # pragma: no cover
+    PromptSession = None  # type: ignore
+
+# Model output is untrusted: strip ANSI escapes and C0/C1 control chars
+# (except \n and \t) so it cannot drive the terminal directly.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x80-\x9f]+")
+
+
+def _strip_control_chars(text: str) -> str:
+    return _CONTROL_CHARS_RE.sub("", text)
+
 from openrouter_agent_cli.utils import (
     OPENROUTER_URL,
     _decode_tool_arguments,
@@ -293,6 +313,14 @@ class OpenRouterAgentCLI:
     def _output_response(self, text: str) -> str:
         if self.non_interactive_mode:
             print(text)
+        elif Console is not None and Markdown is not None:
+            console = Console(file=sys.stdout)
+            console.print()
+            console.print("[bold cyan]assistant>[/bold cyan]")
+            # hyperlinks=False: model output is untrusted and must not hide
+            # destinations behind link text (OSC-8 phishing).
+            console.print(Markdown(_strip_control_chars(text), hyperlinks=False))
+            console.print()
         else:
             print(f"\nassistant> {text}\n")
         return text
@@ -400,9 +428,29 @@ class OpenRouterAgentCLI:
                 await self._run_user_turn(client, self.one_shot_prompt)
                 return
 
+            # prompt_toolkit handles bracketed paste: pasted multi-line text
+            # stays in the buffer (newlines literal) until Enter is pressed.
+            pmtk_session = None
+            if PromptSession is not None and sys.stdin.isatty():
+                try:
+                    pmtk_session = PromptSession()
+                except Exception:
+                    pmtk_session = None
+
             while True:
                 try:
-                    user_text = await asyncio.to_thread(input, "you> ")
+                    if pmtk_session is not None:
+                        try:
+                            user_text = await pmtk_session.prompt_async("you> ")
+                        except (EOFError, KeyboardInterrupt):
+                            raise
+                        except Exception:
+                            # Terminal backend failure: degrade to plain input
+                            # for the rest of the session instead of crashing.
+                            pmtk_session = None
+                            user_text = await asyncio.to_thread(input, "you> ")
+                    else:
+                        user_text = await asyncio.to_thread(input, "you> ")
                 except (EOFError, KeyboardInterrupt):
                     print("\nExiting.")
                     break
