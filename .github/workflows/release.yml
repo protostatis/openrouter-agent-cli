@@ -1,9 +1,9 @@
 name: Release to PyPI
 
+# Manual releases: `uv build && uv publish` locally is the primary path.
+# This workflow exists as an OIDC trusted-publishing fallback — run it via
+# `gh workflow run release.yml`. Requires a Trusted Publisher registered on PyPI.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 jobs:
