@@ -1,10 +1,11 @@
 # openrouter-agent-cli
 
 Standalone terminal agent for OpenRouter models with:
-- tool actions (`run_bash`)
+- tool actions (`run_bash`, `read_file`/`write_file`/`edit_file`, `discover` web search/navigate)
 - interactive permission gating (`allow` / `deny` / `ask`)
 - session persistence
 - context visibility and compaction
+- concurrent `discover` batching (parallel tool calls → `max_concurrency`)
 
 ## Install
 
@@ -12,7 +13,9 @@ Standalone terminal agent for OpenRouter models with:
 cd openrouter-agent-cli
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e .                    # core includes pyunbrowser (real web discovery)
+pip install -e ".[viz]"             # + png gantt (matplotlib)
+pip install -e ".[full]"            # all extras (openai, dotenv, viz)
 ```
 
 ## Run
@@ -43,13 +46,22 @@ openrouter-agent --prompt "Explain tail recursion" --no-tools
 
 ```bash
 openrouter-agent \
-  --model arcee-ai/trinity-large-preview:free \
+  --model nvidia/nemotron-3.5-lightning:free \
   --session-id my-session \
   --workdir ~/Projects \
   --max-turns 24 \
   --max-history-messages 60 \
-  --command-timeout 30
+  --command-timeout 30 \
+  --discovery auto \
+  --max-concurrency 5 \
+  --env-file .env
+
+# web discovery modes: auto (real if pyunbrowser installed else error), mock (synthetic example.com), real (requires pyunbrowser), off
+openrouter-agent --discovery mock --allow-discovery --prompt "what is unbrowser?"
+openrouter-agent --discovery real --allow-discovery  # needs BRAVE_API_KEY for search
 ```
+
+Env auto-load: `.env` in `cwd` and repo root is loaded via `python-dotenv` (or allowlisted fallback: `OPENROUTER_*, BRAVE_API_KEY, UNBROWSER_BINARY`). `--env-file` overrides.
 
 Disable tools:
 
@@ -61,18 +73,21 @@ openrouter-agent --no-tools
 
 - `/help`
 - `/exit`
+- `/new [id]` (fresh session — history reset, isolates crypto contamination)
 - `/model [id]`
 - `/usage`
 - `/context [n]`
 - `/compact`
-- `/clear`
+- `/clear` (same id)
 - `/tools`
 - `/tools on|off`
-- `/allow <tool|*>`
-- `/deny <tool|*>`
+- `/allow <tool|*>` (cached across sessions → `~/.openrouter-agent-cli/policy.json`)
+- `/deny <tool|*>` (cached)
 - `/unallow <tool|*>`
 - `/undeny <tool|*>`
 - `/cwd [path]`
+- `/discovery [auto|mock|real|off]`
+- `/concurrency [n]` (1-16, cap for parallel `discover`)
 
 ## Context management
 
@@ -83,15 +98,18 @@ openrouter-agent --no-tools
 
 ## Security notes
 
-- `run_bash` executes shell commands on your machine in `--workdir`.
-- Model outputs (tool calls) are reflected literally in `run_bash`, so treat every allowed tool call as untrusted input and keep the allow/deny policy enforced unless you deliberately want to run everything.
+- `run_bash` executes shell commands on your machine in `--workdir` (cwd only, not jailed — unlike `read_file`/`write_file`/`edit_file` which enforce workdir jail).
+- `discover` fetches web content (`https` only, private/loopback/link-local/metadata blocked on initial URL; redirects not yet revalidated — treat as SSRF best-effort). All web content is untrusted — model may be prompt-injected via page content; keep allow/deny gated.
+- `BRAVE_API_KEY` used for `discover(search)`, `UNBROWSER_BINARY` can select browser binary — both allowlisted from `.env`; `auto` no longer silently mocks (requires `--discovery mock` for synthetic `example.com/mock`).
+- `discover` batches run concurrently (`max_concurrency`, default 5, isolated per `SmartClient`); `run_bash`/file ops serialize even in mixed batches. Each `discover` has `30s` timeout (thread abandoned on timeout — not yet killable subprocess).
+- Model outputs (tool calls) are reflected literally in `run_bash` + URLs in `discover`, so treat every allowed tool call as untrusted input and keep the allow/deny policy enforced unless you deliberately want to run everything.
 - default policy is `ask` for every tool call
-- use `/deny *` for a fully no-tools session
-- default model is free-tier (`arcee-ai/trinity-large-preview:free`); override with `--model` or `OPENROUTER_MODEL`
+- use `/deny *` for a fully no-tools session / `/allow discover` or `--allow-discovery` to batch without prompts
+- default model is free-tier (`nvidia/nemotron-3.5-lightning:free`); override with `--model` or `OPENROUTER_MODEL`
 
 ## Tool schema seen by the model
 
-When tools are enabled, each OpenRouter request includes this tool definition:
+When tools are enabled, each OpenRouter request includes these tool definitions (filtered when `--discovery off`):
 
 ```json
 [
@@ -116,6 +134,70 @@ When tools are enabled, each OpenRouter request includes this tool definition:
         "required": ["command"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "Read file (workdir-jail) with optional line range.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "start_line": {"type": "integer"},
+          "end_line": {"type": "integer"}
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "write_file",
+      "description": "Write file (workdir-jail, creates dirs).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "content": {"type": "string"}
+        },
+        "required": ["path", "content"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "edit_file",
+      "description": "Edit file by unique old_string → new_string (workdir-jail).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "old_string": {"type": "string"},
+          "new_string": {"type": "string"}
+        },
+        "required": ["path", "old_string", "new_string"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "discover",
+      "description": "Web discovery via pyunbrowser (agent fills search|navigate). Parallel 2-5 calls per turn, concurrent (https-only, private blocked).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "kind": {"type": "string", "enum": ["search", "navigate"]},
+          "query": {"type": "string"},
+          "url": {"type": "string"},
+          "goal": {"type": "string"}
+        },
+        "required": ["kind", "goal"]
+      }
+    }
   }
 ]
 ```
@@ -124,7 +206,7 @@ Request body shape sent to OpenRouter (simplified):
 
 ```json
 {
-  "model": "arcee-ai/trinity-large-preview:free",
+  "model": "nvidia/nemotron-3.5-lightning:free",
   "messages": [...],
   "temperature": 0,
   "max_tokens": 4096,
@@ -141,24 +223,26 @@ If tools are disabled (`--no-tools` or `/tools off`), the request sets:
 }
 ```
 
-## How `run_bash` is invoked
+## How tools are invoked
 
 Execution flow per user turn:
 
-1. Model returns `tool_calls` in assistant message.
+1. Model returns `tool_calls` in assistant message (may be 1 or parallel batch when `parallel_tool_calls=True`).
 2. CLI decodes `function.arguments` JSON into a dict.
-3. Permission policy is applied:
+3. Permission policy is applied per tool:
    - `deny` list blocks immediately.
    - `allow` list runs immediately.
-   - otherwise prompt user (`y/n/a/d`).
+   - otherwise prompt user (`y/n/a/d`); mixed `ask` batches serialize (no concurrency).
 4. For `run_bash`, CLI executes:
    - `asyncio.create_subprocess_shell(command, cwd=<workdir>, stdout=PIPE, stderr=PIPE)`
    - waits with `asyncio.wait_for(..., timeout_seconds)`
    - kills process on timeout
-5. CLI formats stdout/stderr/exit code to text and appends a tool result message:
-   - role: `tool`
-   - tool_call_id: model-provided id
-   - content: command output (capped to 8000 chars before being sent back to model)
+   - concurrent batches: only pure `discover` batches run concurrent (`max_concurrency`, semaphore); any `run_bash`/file ops in batch force serialization
+5. For `discover`, CLI executes (blocking → `to_thread`, `30s` timeout):
+   - `kind=search`: `SmartClient.search(query, engine=brave)` (needs `BRAVE_API_KEY`)
+   - `kind=navigate`: `SmartClient.navigate_auto(url, goal=goal)` (LLM extraction)
+   - `mock` mode: synthetic `example.com/mock` hits (explicit `--discovery mock` only)
+6. CLI formats each result to text and appends `role:tool` messages (one per `tool_call_id`, capped 8000 chars, valid-JSON truncation not yet guaranteed)
 
 Example tool call from model:
 
@@ -201,7 +285,7 @@ Run prompt-only comparison (no tools):
 export OPENROUTER_API_KEY=sk-or-...
 python scripts/ab_test_system_prompts.py \
   --tool-mode none \
-  --model arcee-ai/trinity-large-preview:free
+  --model nvidia/nemotron-3.5-lightning:free
 ```
 
 Run with tool execution enabled (use cautiously):
@@ -211,7 +295,7 @@ export OPENROUTER_API_KEY=sk-or-...
 python scripts/ab_test_system_prompts.py \
   --tool-mode execute \
   --workdir "$(pwd)" \
-  --model arcee-ai/trinity-large-preview:free
+  --model nvidia/nemotron-3.5-lightning:free
 ```
 
 Artifacts are written to `ab_tests/results/<timestamp>/`:
@@ -233,7 +317,7 @@ python scripts/ab_test_system_prompts.py \
   --request-timeout 40 \
   --command-timeout 20 \
   --workdir "$(pwd)" \
-  --model arcee-ai/trinity-large-preview:free \
+  --model nvidia/nemotron-3.5-lightning:free \
   --output-dir ab_tests/results/hard_suite_v1_r3
 ```
 
@@ -243,7 +327,7 @@ Evaluate quality and groundedness from a run:
 export OPENROUTER_API_KEY=sk-or-...
 python scripts/evaluate_ab_results.py \
   --results ab_tests/results/hard_suite_v1_r3/results.json \
-  --judge-model arcee-ai/trinity-large-preview:free \
+  --judge-model nvidia/nemotron-3.5-lightning:free \
   --output-dir ab_tests/results/hard_suite_v1_r3/eval
 ```
 
