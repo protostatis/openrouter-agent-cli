@@ -29,6 +29,14 @@ try:
 except ImportError:  # pragma: no cover
     PromptSession = None  # type: ignore
 
+# Model output is untrusted: strip ANSI escapes and C0/C1 control chars
+# (except \n and \t) so it cannot drive the terminal directly.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x80-\x9f]+")
+
+
+def _strip_control_chars(text: str) -> str:
+    return _CONTROL_CHARS_RE.sub("", text)
+
 from openrouter_agent_cli.utils import (
     OPENROUTER_URL,
     _decode_tool_arguments,
@@ -309,7 +317,9 @@ class OpenRouterAgentCLI:
             console = Console(file=sys.stdout)
             console.print()
             console.print("[bold cyan]assistant>[/bold cyan]")
-            console.print(Markdown(text))
+            # hyperlinks=False: model output is untrusted and must not hide
+            # destinations behind link text (OSC-8 phishing).
+            console.print(Markdown(_strip_control_chars(text), hyperlinks=False))
             console.print()
         else:
             print(f"\nassistant> {text}\n")
@@ -430,7 +440,15 @@ class OpenRouterAgentCLI:
             while True:
                 try:
                     if pmtk_session is not None:
-                        user_text = await pmtk_session.prompt_async("you> ")
+                        try:
+                            user_text = await pmtk_session.prompt_async("you> ")
+                        except (EOFError, KeyboardInterrupt):
+                            raise
+                        except Exception:
+                            # Terminal backend failure: degrade to plain input
+                            # for the rest of the session instead of crashing.
+                            pmtk_session = None
+                            user_text = await asyncio.to_thread(input, "you> ")
                     else:
                         user_text = await asyncio.to_thread(input, "you> ")
                 except (EOFError, KeyboardInterrupt):
