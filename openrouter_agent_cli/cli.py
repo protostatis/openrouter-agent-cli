@@ -19,8 +19,10 @@ import httpx
 
 try:
     from rich.console import Console
+    from rich.markdown import Markdown
 except ImportError:  # pragma: no cover
     Console = None  # type: ignore
+    Markdown = None  # type: ignore
 
 from openrouter_agent_cli.utils import (
     OPENROUTER_URL,
@@ -297,12 +299,15 @@ class OpenRouterAgentCLI:
 
     def _output_response(self, text: str) -> str:
         if self.non_interactive_mode:
-            print(text, end="")
+            print(text)
+        elif Console is not None and Markdown is not None:
+            console = Console(file=sys.stdout)
+            console.print()
+            console.print("[bold cyan]assistant>[/bold cyan]")
+            console.print(Markdown(text))
+            console.print()
         else:
-            if Console is not None:
-                Console(file=sys.stdout, markup=True).print(text, end="")
-            else:
-                print(text, end="")
+            print(f"\nassistant> {text}\n")
         return text
 
     @property
