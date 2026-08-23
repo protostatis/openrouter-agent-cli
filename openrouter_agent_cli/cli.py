@@ -17,6 +17,11 @@ from typing import Any
 
 import httpx
 
+try:
+    from rich.console import Console
+except ImportError:  # pragma: no cover
+    Console = None  # type: ignore
+
 from openrouter_agent_cli.utils import (
     OPENROUTER_URL,
     _decode_tool_arguments,
@@ -292,9 +297,12 @@ class OpenRouterAgentCLI:
 
     def _output_response(self, text: str) -> str:
         if self.non_interactive_mode:
-            print(text)
+            print(text, end="")
         else:
-            print(f"\nassistant> {text}\n")
+            if Console is not None:
+                Console(file=sys.stdout, markup=True).print(text, end="")
+            else:
+                print(text, end="")
         return text
 
     @property
