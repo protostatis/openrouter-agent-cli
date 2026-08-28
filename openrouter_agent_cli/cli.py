@@ -50,8 +50,9 @@ except ImportError:  # pragma: no cover
     run_concurrent = None  # type: ignore
 
 try:
-    from openrouter_agent_cli.discovery import run_discover
+    from openrouter_agent_cli.discovery import DiscoverySession, run_discover
 except ImportError:  # pragma: no cover
+    DiscoverySession = None  # type: ignore
     run_discover = None  # type: ignore
 
 # Default to a free-tier model so first-run usage does not consume paid credits.
@@ -295,6 +296,7 @@ class OpenRouterAgentCLI:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+        self._discovery_session: DiscoverySession | None = None
 
         self.session_root = Path(
             os.environ.get(
@@ -414,6 +416,12 @@ class OpenRouterAgentCLI:
         return sorted(names)
 
     async def run(self):
+        try:
+            await self._run_loop()
+        finally:
+            self._close_discovery_session()
+
+    async def _run_loop(self):
         if not self.non_interactive_mode:
             print("OpenRouter Agent CLI")
             print(f"Model      : {self.model}")
@@ -542,6 +550,7 @@ class OpenRouterAgentCLI:
             return True
 
         if cmd == "/clear":
+            self._close_discovery_session()
             self.messages = [{"role": "system", "content": self.system_prompt}]
             self._save_session()
             print("Session history cleared.")
@@ -550,6 +559,7 @@ class OpenRouterAgentCLI:
         if cmd == "/new":
             new_id = arg.strip() or f"session-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
             old_id = self.session_id
+            self._close_discovery_session()
             self.session_id = _sanitize_session_id(new_id)
             self.messages = [{"role": "system", "content": self.system_prompt}]
             # keep allow/deny policy? /new starts fresh but keeps it; uncomment to reset:
@@ -632,6 +642,8 @@ class OpenRouterAgentCLI:
                 print("Usage: /discovery [auto|mock|real|off]")
                 return True
             self.discovery_mode = arg
+            if arg in ("mock", "off"):
+                self._close_discovery_session()
             print(f"Discovery mode set to: {self.discovery_mode}")
             return True
 
@@ -905,11 +917,32 @@ class OpenRouterAgentCLI:
     async def _run_bash(self, command: str, timeout_seconds: int) -> str:
         return await run_bash(command, self.workdir, timeout_seconds)
 
+    def _get_discovery_session(self) -> DiscoverySession | None:
+        if DiscoverySession is None:
+            return None
+        if self._discovery_session is None:
+            self._discovery_session = DiscoverySession(
+                binary=os.environ.get("UNBROWSER_BINARY")
+                or os.environ.get("UNBROWSER_BIN"),
+                brave_api_key=os.environ.get("BRAVE_API_KEY"),
+            )
+        return self._discovery_session
+
+    def _close_discovery_session(self) -> None:
+        if self._discovery_session is not None:
+            self._discovery_session.close()
+            self._discovery_session = None
+
     async def _discover(self, args: dict[str, Any]) -> str:
         if self.discovery_mode == "off":
             return "discover error: discovery is disabled (use --discovery auto|mock|real)"
         if run_discover is None:
             return "discover error: discovery module not available"
+        discovery_session = (
+            self._get_discovery_session()
+            if self.discovery_mode in ("auto", "real")
+            else None
+        )
         # run_discover is blocking (may do time.sleep or SmartClient I/O) -> thread with timeout
         try:
             return await asyncio.wait_for(
@@ -921,7 +954,9 @@ class OpenRouterAgentCLI:
                     str(args.get("goal", "")),
                     discovery_mode=self.discovery_mode,
                     brave_api_key=os.environ.get("BRAVE_API_KEY"),
-                    binary=os.environ.get("UNBROWSER_BINARY"),
+                    binary=os.environ.get("UNBROWSER_BINARY")
+                    or os.environ.get("UNBROWSER_BIN"),
+                    session=discovery_session,
                 ),
                 timeout=30,
             )
