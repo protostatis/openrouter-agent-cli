@@ -1,4 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
+  "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+  "mcp": {
+    "npcterm": {
+      "type": "local",
+      "command": ["/Users/zhiminzou/.cargo/bin/npcterm"],
+      "enabled": true
+    }
+  }
 }

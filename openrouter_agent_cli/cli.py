@@ -888,7 +888,6 @@ class OpenRouterAgentCLI:
             print("  /inspect <call-id>    Show a complete recent tool request/result")
             print("  /sessions             List saved sessions")
             print("  /resume <id>          Resume a saved session")
-            print("  /cancel               Cancel the active turn when one is running")
             print("  /policy               Show persistent and ephemeral policy rules")
             print("  /export [path]        Export the current transcript")
             return True
@@ -1030,6 +1029,13 @@ class OpenRouterAgentCLI:
             if not self._valid_policy_target(arg):
                 print(f"Unknown tool: {arg}. Available: {', '.join(self._tool_names())}")
                 return True
+            # Two-step confirm for persistent allow
+            confirm = (await self._read_prompt(
+                f"Allow {arg} persistently across sessions and working directories? [y/N]: "
+            )).strip().lower()
+            if confirm not in ("y", "yes"):
+                print("Allowance cancelled.")
+                return True
             self.policy.allow.add(arg)
             self.policy.deny.discard(arg)
             self._save_policy()
@@ -1042,6 +1048,13 @@ class OpenRouterAgentCLI:
                 return True
             if not self._valid_policy_target(arg):
                 print(f"Unknown tool: {arg}. Available: {', '.join(self._tool_names())}")
+                return True
+            # Two-step confirm for persistent deny
+            confirm = (await self._read_prompt(
+                f"Deny {arg} persistently across sessions and working directories? [y/N]: "
+            )).strip().lower()
+            if confirm not in ("y", "yes"):
+                print("Denyance cancelled.")
                 return True
             self.policy.deny.add(arg)
             self.policy.allow.discard(arg)
@@ -2148,6 +2161,12 @@ class OpenRouterAgentCLI:
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
+            # Poison the shared session so subsequent discovers fail fast
+            # with a clear message instead of queueing indefinitely behind a
+            # timed-out browser thread. Do NOT synchronously close the session
+            # here — its lock may still be held by the terminated worker,
+            # which would freeze the event loop.
+            self._discovery_poisoned = True
             return f"discover error: timed out after {timeout_seconds}s"
 
     async def _execute_tool(
