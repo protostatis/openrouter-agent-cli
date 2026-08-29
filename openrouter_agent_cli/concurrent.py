@@ -12,19 +12,24 @@ max(latency).
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 
 async def run_concurrent(
     calls: list[tuple[str, dict[str, Any], str]],
     handler: Callable[[str, dict[str, Any]], Awaitable[str]],
     max_concurrency: int = 5,
+    handler_with_id: Callable[[str, dict[str, Any], str], Awaitable[str]] | None = None,
 ) -> list[str]:
     """Run `handler(tool_name, args)` for each call concurrently.
 
     `calls` is list of (tool_name, args, tool_call_id) – id kept for ordering only.
     Returns list of result strings in input order (asyncio.gather preserves order).
     Uses semaphore to cap browser concurrency (SmartClient is 1 page/session per instance).
+
+    `handler_with_id` is an optional form for callers that need the stable call ID
+    while executing and inspecting work.
     """
     if not calls:
         return []
@@ -32,13 +37,15 @@ async def run_concurrent(
         max_concurrency = 1
     sem = asyncio.Semaphore(max_concurrency)
 
-    async def _one(tool_name: str, args: dict[str, Any]) -> str:
+    async def _one(tool_name: str, args: dict[str, Any], tool_call_id: str) -> str:
         async with sem:
             try:
+                if handler_with_id is not None:
+                    return await handler_with_id(tool_name, args, tool_call_id)
                 return await handler(tool_name, args)
             except Exception as e:
                 return f"Tool error ({tool_name}): {e}"
 
     # handler may be sync via to_thread; normalize by awaiting
-    tasks = [_one(name, args) for name, args, _ in calls]
+    tasks = [_one(name, args, call_id) for name, args, call_id in calls]
     return await asyncio.gather(*tasks)

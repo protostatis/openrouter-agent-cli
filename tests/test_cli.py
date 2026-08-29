@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -195,6 +196,32 @@ class TestToolPermissionPolicy:
 
 
 # ---------------------------------------------------------------------------
+# Startup presentation
+# ---------------------------------------------------------------------------
+
+
+class TestStartupBanner:
+    def test_banner_is_ascii_and_identifiable(self, capsys):
+        cli = _make_cli()
+        cli._print_startup_banner()
+        output = capsys.readouterr().out
+        assert "OPENROUTER AGENT CLI" in output
+        assert "guarded execution" in output
+        assert all(ord(char) < 128 for char in output)
+
+    def test_clear_terminal_only_targets_a_real_tty(self):
+        cli = _make_cli()
+        stdout = MagicMock()
+        stdout.isatty.return_value = True
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        with patch.object(sys, "stdout", stdout), patch.object(sys, "stdin", stdin):
+            cli._clear_terminal()
+        stdout.write.assert_called_once_with("\x1b[2J\x1b[H")
+        stdout.flush.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
 # TOOLS constant
 # ---------------------------------------------------------------------------
 
@@ -215,6 +242,11 @@ class TestToolsConstant:
     def test_has_edit_file(self):
         names = [t["function"]["name"] for t in TOOLS]
         assert "edit_file" in names
+
+    def test_has_list_dir_and_search_text(self):
+        names = [t["function"]["name"] for t in TOOLS]
+        assert "list_dir" in names
+        assert "search_text" in names
 
     def test_all_tools_have_parameters(self):
         for tool in TOOLS:
@@ -269,61 +301,105 @@ class TestFileTools:
 
     @pytest.mark.asyncio
     async def test_write_and_read_file(self, cli):
-        result = await cli._write_file("test.txt", "hello world")
-        assert "ok" in result
+        result = json.loads(await cli._write_file("test.txt", "hello world"))
+        assert result["ok"] is True
 
-        result = await cli._read_file("test.txt", None, None)
-        assert "hello world" in result
+        result = json.loads(await cli._read_file("test.txt", None, None))
+        assert result["ok"] is True
+        assert "hello world" in result["content"]
 
     @pytest.mark.asyncio
     async def test_read_file_with_range(self, cli):
         content = "line1\nline2\nline3\nline4\n"
         await cli._write_file("lines.txt", content)
 
-        result = await cli._read_file("lines.txt", 2, 3)
-        assert "line2" in result
-        assert "line3" in result
-        assert "line1" not in result
+        result = json.loads(await cli._read_file("lines.txt", 2, 3))
+        assert "line2" in result["content"]
+        assert "line3" in result["content"]
+        assert "line1" not in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_read_file_paging_cursor(self, cli):
+        await cli._write_file("pages.txt", "\n".join(f"L{i}" for i in range(1, 21)))
+        first = json.loads(await cli._read_file("pages.txt", None, None, max_lines=5))
+        assert first["ok"] is True
+        assert first["end_line"] == 5
+        assert first["next_cursor"] == "L6"
+        second = json.loads(
+            await cli._read_file("pages.txt", None, None, max_lines=5, cursor=first["next_cursor"])
+        )
+        assert second["start_line"] == 6
+        assert "L6" in second["content"]
+
+    @pytest.mark.asyncio
+    async def test_list_dir_and_search_text(self, cli):
+        await cli._write_file("src/a.py", "alpha = 1\nbeta = 2\n")
+        await cli._write_file("src/b.py", "gamma = 3\n")
+        listed = json.loads(await cli._list_dir("src"))
+        assert listed["ok"] is True
+        names = {entry["name"] for entry in listed["entries"]}
+        assert names == {"a.py", "b.py"}
+
+        found = json.loads(await cli._search_text("beta", "src"))
+        assert found["ok"] is True
+        assert found["count"] == 1
+        assert found["matches"][0]["path"].endswith("a.py")
 
     @pytest.mark.asyncio
     async def test_edit_file(self, cli):
         await cli._write_file("edit.txt", "hello world")
-        result = await cli._edit_file("edit.txt", "world", "universe")
-        assert "ok" in result
+        result = json.loads(await cli._edit_file("edit.txt", "world", "universe"))
+        assert result["ok"] is True
+        assert result["old_sha256"]
+        assert result["new_sha256"]
 
-        result = await cli._read_file("edit.txt", None, None)
-        assert "hello universe" in result
+        result = json.loads(await cli._read_file("edit.txt", None, None))
+        assert "hello universe" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_undo_last_file_write(self, cli):
+        await cli._write_file("undo.txt", "v1")
+        await cli._write_file("undo.txt", "v2")
+        restored = cli._undo_last_file_change()
+        assert "Restored" in restored
+        result = json.loads(await cli._read_file("undo.txt", None, None))
+        assert result["content"] == "v1"
 
     @pytest.mark.asyncio
     async def test_edit_file_non_unique_old_string(self, cli):
         await cli._write_file("dup.txt", "foo bar foo")
-        result = await cli._edit_file("dup.txt", "foo", "baz")
-        assert "found 2 times" in result
+        result = json.loads(await cli._edit_file("dup.txt", "foo", "baz"))
+        assert result["ok"] is False
+        assert "found 2 times" in result["error"]
 
     @pytest.mark.asyncio
     async def test_read_file_not_found(self, cli):
-        result = await cli._read_file("nonexistent.txt", None, None)
+        result = json.loads(await cli._read_file("nonexistent.txt", None, None))
+        assert result["ok"] is False
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_write_file_creates_directories(self, cli):
-        result = await cli._write_file("sub/dir/file.txt", "content")
-        assert "ok" in result
+        result = json.loads(await cli._write_file("sub/dir/file.txt", "content"))
+        assert result["ok"] is True
         assert (Path(cli.workdir) / "sub" / "dir" / "file.txt").exists()
 
     @pytest.mark.asyncio
     async def test_read_file_outside_workdir(self, cli):
-        result = await cli._read_file("/etc/passwd", None, None)
+        result = json.loads(await cli._read_file("/etc/passwd", None, None))
+        assert result["ok"] is False
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_write_file_outside_workdir(self, cli):
-        result = await cli._write_file("/tmp/evil.txt", "content")
+        result = json.loads(await cli._write_file("/tmp/evil.txt", "content"))
+        assert result["ok"] is False
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_edit_file_not_found(self, cli):
-        result = await cli._edit_file("missing.txt", "old", "new")
+        result = json.loads(await cli._edit_file("missing.txt", "old", "new"))
+        assert result["ok"] is False
         assert "error" in result
 
 
@@ -340,17 +416,23 @@ class TestBashTool:
     @pytest.mark.asyncio
     async def test_run_bash_success(self, cli):
         result = await cli._run_bash("echo hello", 5)
-        assert "hello" in result
+        payload = json.loads(result)
+        assert payload["ok"] is True
+        assert "hello" in payload["stdout"]
 
     @pytest.mark.asyncio
     async def test_run_bash_failure(self, cli):
         result = await cli._run_bash("exit 1", 5)
-        assert "exit=1" in result
+        payload = json.loads(result)
+        assert payload["ok"] is False
+        assert payload["exit_code"] == 1
 
     @pytest.mark.asyncio
     async def test_run_bash_timeout(self, cli):
         result = await cli._run_bash("sleep 10", 1)
-        assert "timed out" in result
+        payload = json.loads(result)
+        assert payload["timed_out"] is True
+        assert payload["ok"] is False
 
     @pytest.mark.asyncio
     async def test_run_bash_stdout_stderr(self, cli):
@@ -358,8 +440,9 @@ class TestBashTool:
             "python3 -c \"import sys; print('out'); print('err', file=sys.stderr); sys.exit(1)\"",
             5,
         )
-        assert "out" in result
-        assert "err" in result
+        payload = json.loads(result)
+        assert "out" in payload["stdout"]
+        assert "err" in payload["stderr"]
 
 
 # ---------------------------------------------------------------------------
@@ -387,30 +470,36 @@ class TestExecuteToolRouting:
 
     @pytest.mark.asyncio
     async def test_run_bash_via_execute_tool(self, cli):
-        result = await cli._execute_tool("run_bash", {"command": "echo test"})
-        assert "test" in result
+        result = json.loads(await cli._execute_tool("run_bash", {"command": "echo test"}))
+        assert result["ok"] is True
+        assert "test" in result["stdout"]
 
     @pytest.mark.asyncio
     async def test_read_file_via_execute_tool(self, cli):
         await cli._write_file("via_tool.txt", "content")
-        result = await cli._execute_tool("read_file", {"path": "via_tool.txt"})
-        assert "content" in result
+        result = json.loads(await cli._execute_tool("read_file", {"path": "via_tool.txt"}))
+        assert result["ok"] is True
+        assert "content" in result["content"]
 
     @pytest.mark.asyncio
     async def test_write_file_via_execute_tool(self, cli):
-        result = await cli._execute_tool(
-            "write_file", {"path": "via_tool2.txt", "content": "data"}
+        result = json.loads(
+            await cli._execute_tool(
+                "write_file", {"path": "via_tool2.txt", "content": "data"}
+            )
         )
-        assert "ok" in result
+        assert result["ok"] is True
 
     @pytest.mark.asyncio
     async def test_edit_file_via_execute_tool(self, cli):
         await cli._write_file("via_tool3.txt", "old")
-        result = await cli._execute_tool(
-            "edit_file",
-            {"path": "via_tool3.txt", "old_string": "old", "new_string": "new"},
+        result = json.loads(
+            await cli._execute_tool(
+                "edit_file",
+                {"path": "via_tool3.txt", "old_string": "old", "new_string": "new"},
+            )
         )
-        assert "ok" in result
+        assert result["ok"] is True
 
 
 # ---------------------------------------------------------------------------
