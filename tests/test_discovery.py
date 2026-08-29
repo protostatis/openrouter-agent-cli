@@ -76,6 +76,30 @@ def test_discovery_session_reuses_client_and_closes_it():
     assert client.closed is True
 
 
+def test_run_discover_blocks_private_and_non_https_navigation():
+    private = json.loads(
+        run_discover(
+            kind="navigate",
+            url="https://127.0.0.1/secret",
+            goal="inspect",
+            discovery_mode="mock",
+        )
+    )
+    assert "error" in private
+    assert "blocked" in private["error"]
+
+    insecure = json.loads(
+        run_discover(
+            kind="navigate",
+            url="http://example.com",
+            goal="inspect",
+            discovery_mode="mock",
+        )
+    )
+    assert "error" in insecure
+    assert "https" in insecure["error"]
+
+
 @pytest.mark.asyncio
 async def test_cli_reuses_one_discovery_session_for_a_task(tmp_path, monkeypatch):
     sessions = []

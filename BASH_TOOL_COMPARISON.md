@@ -9,9 +9,9 @@ As of February 21, 2026.
 | How shell is exposed to model | Explicit JSON function tool (`run_bash`) defined in app code | Built-in `Bash` tool | Built-in shell tool permissions (`shell(...)`) |
 | Execution path | `tool_calls` -> policy check -> `create_subprocess_shell(...)` | Tool runtime managed by Claude Code | Tool runtime managed by Copilot CLI |
 | Direct shell bypass | Not implemented | `!` runs shell directly | `!` runs shell directly |
-| Permission model | `allow`/`deny`/`ask` by tool name | Rich permission modes + rules/patterns | Per-tool allow/deny flags and session approvals |
+| Permission model | once/batch/turn/session/persistent scopes plus `allow`/`deny`/`ask` by tool name | Rich permission modes + rules/patterns | Per-tool allow/deny flags and session approvals |
 | Context handling | Session history + compaction | `/context`, `/compact`, memory system | `/context`, `/compact`, history compression |
-| Sandboxing | No built-in sandbox | Documented sandbox mode | Trust and approval controls (no equivalent documented OS sandbox page) |
+| Sandboxing | No built-in OS sandbox; shell uses a separate process group, output limits, and API-key scrubbing | Documented sandbox mode | Trust and approval controls (no equivalent documented OS sandbox page) |
 
 ## OpenRouter Agent CLI implementation (this repo)
 
@@ -45,13 +45,13 @@ Declared in `openrouter_agent_cli/cli.py`:
 ```
 
 Key code references:
-- tool registration: `openrouter_agent_cli/cli.py:31`
-- request attaches tools: `openrouter_agent_cli/cli.py:357`
-- tool disabled path (`tool_choice=none`): `openrouter_agent_cli/cli.py:354`
-- permission gate: `openrouter_agent_cli/cli.py:487`
-- shell execution: `openrouter_agent_cli/cli.py:455`
-- timeout + kill: `openrouter_agent_cli/cli.py:462`
-- tool result appended to messages: `openrouter_agent_cli/cli.py:600`
+- tool registration: `openrouter_agent_cli/cli.py:TOOLS`
+- request attaches tools: `OpenRouterAgentCLI._call_openrouter`
+- tool disabled path (`tool_choice=none`): `OpenRouterAgentCLI._call_openrouter`
+- permission gate: `OpenRouterAgentCLI._confirm_tool_call` and `_confirm_tool_batch`
+- shell execution: `openrouter_agent_cli/utils.py:run_bash`
+- timeout + process-group kill: `openrouter_agent_cli/utils.py:_kill_process_tree`
+- tool result inspection: `OpenRouterAgentCLI._run_tool_call` and `/inspect`
 
 ### Invocation flow
 
@@ -59,7 +59,8 @@ Key code references:
 2. CLI decodes `function.arguments`.
 3. CLI applies policy (`deny`, `allow`, or interactive ask).
 4. If allowed, CLI runs `asyncio.create_subprocess_shell(command, cwd=self.workdir, ...)`.
-5. CLI returns formatted stdout/stderr/exit text as a `role=tool` message.
+5. CLI returns bounded stdout/stderr/exit text as a `role=tool` message, preserving
+   exactly one result for every tool-call ID.
 
 Note: despite the name `run_bash`, execution uses system shell via `create_subprocess_shell`, not explicitly `bash` unless the command itself calls `bash`.
 

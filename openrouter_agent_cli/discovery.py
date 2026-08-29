@@ -21,6 +21,7 @@ import ipaddress
 import json
 import os
 import random
+import socket
 import threading
 import time
 import urllib.parse
@@ -88,6 +89,58 @@ def _navigation_view(bundle: dict[str, Any]) -> dict[str, Any]:
     return {key: bundle[key] for key in _NAVIGATION_KEYS if key in bundle}
 
 
+def _validate_public_url(url: str, *, resolve_dns: bool = True) -> None:
+    """Reject non-HTTPS and hosts that resolve to local/reserved addresses."""
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme != "https":
+        raise ValueError(f"navigate url must be https, got {parsed.scheme!r}")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("navigate url has no hostname")
+
+    def reject_ip(ip_text: str) -> None:
+        ip = ipaddress.ip_address(ip_text)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_unspecified
+            or ip.is_multicast
+        ):
+            raise ValueError(f"navigate to private/reserved address blocked: {ip_text}")
+
+    try:
+        reject_ip(host)
+    except ValueError as exc:
+        # A hostname raises a normal parsing ValueError; an actual IP raises our
+        # security error. Distinguish them by checking the host text.
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            raise exc
+
+    lowered = host.lower().rstrip(".")
+    if lowered in ("localhost", "metadata.google.internal") or lowered.endswith(".internal"):
+        raise ValueError(f"navigate to {host} blocked")
+    if not resolve_dns:
+        return
+
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+        }
+    except OSError as exc:
+        raise ValueError(f"could not resolve navigate host {host}: {exc}") from exc
+    if not addresses:
+        raise ValueError(f"could not resolve navigate host {host}")
+    for address in addresses:
+        reject_ip(address)
+
+
 def _real_payload(
     client: Any,
     kind: str,
@@ -100,6 +153,9 @@ def _real_payload(
     if kind == "navigate" and url:
         bundle = client.navigate_auto(url, goal=goal or None)
         data = dict(bundle)
+        final_url = data.get("url")
+        if isinstance(final_url, str) and final_url and final_url != url:
+            _validate_public_url(final_url, resolve_dns=True)
         # Keep the historical key for callers while exposing the current
         # SmartClient fields at the top level as the canonical shape.
         data["navigate"] = _navigation_view(bundle)
@@ -213,19 +269,7 @@ def run_discover(
     # SSRF-safe validation for navigate
     if kind == "navigate" and url:
         try:
-            parsed = urllib.parse.urlparse(url.strip())
-            if parsed.scheme != "https":
-                return json.dumps({"error": f"discover error: navigate url must be https, got {parsed.scheme!r}"})
-            host = parsed.hostname or ""
-            # block localhost/private/link-local
-            try:
-                ip = ipaddress.ip_address(host)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                    return json.dumps({"error": f"discover error: navigate to private address blocked: {host}"})
-            except ValueError:
-                # hostname, not IP — block obvious local names
-                if host.lower() in ("localhost", "metadata.google.internal") or host.endswith(".internal"):
-                    return json.dumps({"error": f"discover error: navigate to {host} blocked"})
+            _validate_public_url(url, resolve_dns=discovery_mode in ("auto", "real"))
         except Exception as e:
             return json.dumps({"error": f"discover error: invalid url {url!r}: {e}"})
 

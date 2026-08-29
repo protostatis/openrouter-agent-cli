@@ -1,12 +1,13 @@
 # openrouter-agent-cli
 
 Standalone terminal agent for OpenRouter models with:
-- tool actions (`run_bash`, `read_file`/`write_file`/`edit_file`, `discover` web search/navigate)
+- tool actions (`run_bash`, `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file`, `discover` web search/navigate)
 - interactive permission gating (`allow` / `deny` / `ask`)
 - session persistence
 - context visibility and compaction
 - concurrent `discover` batching (parallel tool calls → `max_concurrency`)
-- Markdown-rendered assistant replies and multi-line paste support in the REPL
+- lifecycle status, scoped approvals, safe terminal rendering, and tool inspection
+- Markdown-rendered assistant replies and multi-line paste support in the scrollback REPL
 
 ## Install
 
@@ -88,8 +89,10 @@ openrouter-agent --no-tools
 - `/new [id]` (fresh session — history reset, isolates crypto contamination)
 - `/model [id]`
 - `/usage`
+- `/status`
 - `/context [n]`
-- `/compact`
+- `/compact [--preview]`
+- `/undo` (last compaction or last file write/edit)
 - `/clear` (same id)
 - `/tools`
 - `/tools on|off`
@@ -100,23 +103,36 @@ openrouter-agent --no-tools
 - `/cwd [path]`
 - `/discovery [auto|mock|real|off]`
 - `/concurrency [n]` (1-16, cap for parallel `discover`)
+- `/inspect <call-id>`
+- `/sessions`
+- `/resume <id>`
+- `/cancel`
+- `/policy`
+- `/export [path]`
 
 ## Context management
 
 - history is saved in `~/.openrouter-agent-cli/sessions/<session_id>.json`
-- `/usage` shows rough token estimate
-- `/compact` forces summarization
-- automatic compaction triggers when non-system message count exceeds `--max-history-messages`
+- `/usage` shows a rough token estimate and process-only API counters
+- `/status` shows the active model, session, cwd, tool policy, context estimate, and
+  current lifecycle state
+- `/compact` forces summarization; `/compact --preview` shows what would be summarized
+- automatic compaction triggers around 12k estimated tokens; `--max-history-messages`
+  also controls persisted-history trimming when both message and token thresholds are high
+- `/undo` restores the last compaction snapshot or the last file write/edit;
+  failed summarization does not replace the original history
 
 ## Security notes
 
-- `run_bash` executes shell commands on your machine in `--workdir` (cwd only, not jailed — unlike `read_file`/`write_file`/`edit_file` which enforce workdir jail).
-- `discover` fetches web content (`https` only, private/loopback/link-local/metadata blocked on initial URL; redirects not yet revalidated — treat as SSRF best-effort). All web content is untrusted — model may be prompt-injected via page content; keep allow/deny gated.
+- `run_bash` executes shell commands on your machine in `--workdir` (cwd only, not jailed — unlike `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file` which enforce workdir jail). It returns structured JSON, runs in a separate process group, has bounded output, kills descendants on timeout, and does not pass OpenRouter/Brave API keys to the child environment.
+- `discover` fetches web content (`https` only, private/loopback/link-local/metadata blocked after hostname resolution and on observed final URLs; browser subrequests still depend on the underlying browser boundary). All web content is untrusted — model may be prompt-injected via page content; keep allow/deny gated.
 - `BRAVE_API_KEY` used for `discover(search)`, `UNBROWSER_BINARY` can select browser binary — both allowlisted from `.env`; `auto` no longer silently mocks (requires `--discovery mock` for synthetic `example.com/mock`).
-- `discover` batches run concurrently (`max_concurrency`, default 5, isolated per `SmartClient`); `run_bash`/file ops serialize even in mixed batches. Each `discover` has `30s` timeout (thread abandoned on timeout — not yet killable subprocess).
+- independent `discover` batches use stateless clients for real concurrency (`max_concurrency`, default 5); stateful calls outside a batch reuse one session and are queued. `run_bash`/file ops serialize in mixed batches. Each `discover` has a configurable `1-120s` timeout (30s default).
 - Model outputs (tool calls) are reflected literally in `run_bash` + URLs in `discover`, so treat every allowed tool call as untrusted input and keep the allow/deny policy enforced unless you deliberately want to run everything.
-- default policy is `ask` for every tool call
-- use `/deny *` for a fully no-tools session / `/allow discover` or `--allow-discovery` to batch without prompts
+- default policy is `ask` for every tool call; approvals can be once, batch, turn,
+  session, or explicitly persistent
+- use `/deny *` for a fully no-tools session; `/allow discover` is persistent while
+  `--allow-discovery` is scoped to the current process
 - default model is free-tier (`nvidia/nemotron-3.5-lightning:free`); override with `--model` or `OPENROUTER_MODEL`
 
 ## Tool schema seen by the model
@@ -129,19 +145,12 @@ When tools are enabled, each OpenRouter request includes these tool definitions 
     "type": "function",
     "function": {
       "name": "run_bash",
-      "description": "Run a shell command in the current working directory and return stdout/stderr.",
+      "description": "Run a host shell command; returns structured JSON (ok/exit_code/stdout/stderr/timed_out).",
       "parameters": {
         "type": "object",
         "properties": {
-          "command": {
-            "type": "string",
-            "description": "Shell command to execute."
-          },
-          "timeout_seconds": {
-            "type": "integer",
-            "description": "Execution timeout in seconds (1-600).",
-            "default": 30
-          }
+          "command": {"type": "string"},
+          "timeout_seconds": {"type": "integer", "default": 30}
         },
         "required": ["command"]
       }
@@ -150,14 +159,49 @@ When tools are enabled, each OpenRouter request includes these tool definitions 
   {
     "type": "function",
     "function": {
+      "name": "list_dir",
+      "description": "List directory entries inside the workdir jail.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "max_entries": {"type": "integer"}
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_text",
+      "description": "Literal text search under a workdir path.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {"type": "string"},
+          "path": {"type": "string"},
+          "max_matches": {"type": "integer"},
+          "max_file_bytes": {"type": "integer"}
+        },
+        "required": ["pattern"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "read_file",
-      "description": "Read file (workdir-jail) with optional line range.",
+      "description": "Read file (workdir-jail) with line range, max_lines paging, and next_cursor.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {"type": "string"},
           "start_line": {"type": "integer"},
-          "end_line": {"type": "integer"}
+          "end_line": {"type": "integer"},
+          "max_lines": {"type": "integer"},
+          "max_bytes": {"type": "integer"},
+          "cursor": {"type": "string"}
         },
         "required": ["path"]
       }
@@ -167,12 +211,14 @@ When tools are enabled, each OpenRouter request includes these tool definitions 
     "type": "function",
     "function": {
       "name": "write_file",
-      "description": "Write file (workdir-jail, creates dirs).",
+      "description": "Atomic write (workdir-jail) with optional expected_sha256 and dry_run.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {"type": "string"},
-          "content": {"type": "string"}
+          "content": {"type": "string"},
+          "expected_sha256": {"type": "string"},
+          "dry_run": {"type": "boolean"}
         },
         "required": ["path", "content"]
       }
@@ -182,13 +228,15 @@ When tools are enabled, each OpenRouter request includes these tool definitions 
     "type": "function",
     "function": {
       "name": "edit_file",
-      "description": "Edit file by unique old_string → new_string (workdir-jail).",
+      "description": "Atomic unique string replace (workdir-jail) with optional expected_sha256 and dry_run.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {"type": "string"},
           "old_string": {"type": "string"},
-          "new_string": {"type": "string"}
+          "new_string": {"type": "string"},
+          "expected_sha256": {"type": "string"},
+          "dry_run": {"type": "boolean"}
         },
         "required": ["path", "old_string", "new_string"]
       }
@@ -198,14 +246,15 @@ When tools are enabled, each OpenRouter request includes these tool definitions 
     "type": "function",
     "function": {
       "name": "discover",
-      "description": "Web discovery via pyunbrowser (agent fills search|navigate). Parallel 2-5 calls per turn, concurrent (https-only, private blocked).",
+      "description": "Web discovery via pyunbrowser. Use search with query or navigate with an https URL; independent calls may run stateless and concurrently.",
       "parameters": {
         "type": "object",
         "properties": {
           "kind": {"type": "string", "enum": ["search", "navigate"]},
           "query": {"type": "string"},
           "url": {"type": "string"},
-          "goal": {"type": "string"}
+          "goal": {"type": "string"},
+          "timeout_seconds": {"type": "integer"}
         },
         "required": ["kind", "goal"]
       }
@@ -244,17 +293,17 @@ Execution flow per user turn:
 3. Permission policy is applied per tool:
    - `deny` list blocks immediately.
    - `allow` list runs immediately.
-   - otherwise prompt user (`y/n/a/d`); mixed `ask` batches serialize (no concurrency).
+   - otherwise prompt user with once/batch/turn/session/persistent scopes.
 4. For `run_bash`, CLI executes:
-   - `asyncio.create_subprocess_shell(command, cwd=<workdir>, stdout=PIPE, stderr=PIPE)`
+   - `asyncio.create_subprocess_shell(command, cwd=<workdir>, stdout=PIPE, stderr=PIPE)` in a separate process group with sensitive API keys removed from the child environment
    - waits with `asyncio.wait_for(..., timeout_seconds)`
    - kills process on timeout
-   - concurrent batches: only pure `discover` batches run concurrent (`max_concurrency`, semaphore); any `run_bash`/file ops in batch force serialization
-5. For `discover`, CLI executes (blocking → `to_thread`, `30s` timeout):
+    - concurrent batches: independent pure `discover` calls use stateless clients and run concurrent (`max_concurrency`, semaphore); any `run_bash`/file ops in batch force serialization
+5. For `discover`, CLI executes (blocking → `to_thread`, configurable `1-120s` timeout, 30s default):
    - `kind=search`: `SmartClient.search(query, engine=brave)` (needs `BRAVE_API_KEY`)
    - `kind=navigate`: `SmartClient.navigate_auto(url, goal=goal)` (LLM extraction)
    - `mock` mode: synthetic `example.com/mock` hits (explicit `--discovery mock` only)
-6. CLI formats each result to text and appends `role:tool` messages (one per `tool_call_id`, capped 8000 chars, valid-JSON truncation not yet guaranteed)
+6. CLI records each call with a stable ID, formats a bounded result, and appends exactly one `role:tool` message per `tool_call_id`; structured discovery truncation remains valid JSON. Use `/inspect <call-id>` to inspect a recent full result.
 
 Example tool call from model:
 

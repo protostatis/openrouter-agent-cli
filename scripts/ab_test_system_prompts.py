@@ -38,8 +38,16 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", value).strip("_") or "item"
 
 
-async def _run_bash(command: str, cwd: str, timeout_seconds: int) -> str:
-    return await run_bash(command, cwd, timeout_seconds)
+async def _run_bash(
+    command: str,
+    cwd: str,
+    timeout_seconds: int,
+    *,
+    structured: bool = False,
+) -> str:
+    return await run_bash(
+        command, cwd, timeout_seconds, structured=structured
+    )
 
 
 async def _call_openrouter(
@@ -254,7 +262,10 @@ async def _run_case(
                         result = "run_bash error: 'command' is required."
                     else:
                         result = await _run_bash(
-                            command, cwd=workdir, timeout_seconds=timeout_seconds
+                            command,
+                            cwd=workdir,
+                            timeout_seconds=timeout_seconds,
+                            structured=False,
                         )
 
                 tool_results.append(
