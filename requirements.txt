@@ -1,1 +1,4 @@
 httpx>=0.27
+prompt-toolkit>=3.0.53
+pyunbrowser>=0.0.21
+rich>=15.0.0

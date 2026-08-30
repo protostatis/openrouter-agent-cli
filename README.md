@@ -82,6 +82,12 @@ Disable tools:
 openrouter-agent --no-tools
 ```
 
+Debug logging:
+
+```bash
+openrouter-agent --debug  # timestamps + idle instrumentation on stderr
+```
+
 ## Slash commands
 
 - `/help`

@@ -1562,13 +1562,20 @@ class OpenRouterAgentCLI:
             choice = "n"
         tool_names = {tool_name for tool_name, _, _, _ in calls}
         if choice == "a":
-            self.policy.allow.update(tool_names)
-            self.policy.deny.difference_update(tool_names)
-            # Clear opposing ephemeral denies
-            self._batch_deny.difference_update(tool_names)
-            self._turn_deny.difference_update(tool_names)
-            self._session_deny.difference_update(tool_names)
-            self._save_policy()
+            confirm = (await self._read_prompt(
+                "Type 'yes' to allow these tools persistently across sessions and working directories: "
+            )).strip().lower()
+            if confirm == "yes":
+                self.policy.allow.update(tool_names)
+                self.policy.deny.difference_update(tool_names)
+                # Clear opposing ephemeral denies
+                self._batch_deny.difference_update(tool_names)
+                self._turn_deny.difference_update(tool_names)
+                self._session_deny.difference_update(tool_names)
+                self._save_policy()
+                print(f"Persistent allow: {', '.join(sorted(tool_names))} (persistent)")
+            else:
+                print("Persistent allow cancelled.")
             return
         if choice == "s":
             self._session_allow.update(tool_names)
@@ -1580,13 +1587,20 @@ class OpenRouterAgentCLI:
             self._batch_allow.update(tool_names)
             return
         if choice == "d":
-            self.policy.deny.update(tool_names)
-            self.policy.allow.difference_update(tool_names)
-            # Clear opposing ephemeral grants
-            self._batch_allow.difference_update(tool_names)
-            self._turn_allow.difference_update(tool_names)
-            self._session_allow.difference_update(tool_names)
-            self._save_policy()
+            confirm = (await self._read_prompt(
+                "Type 'yes' to deny these tools persistently across sessions and working directories: "
+            )).strip().lower()
+            if confirm == "yes":
+                self.policy.deny.update(tool_names)
+                self.policy.allow.difference_update(tool_names)
+                # Clear opposing ephemeral grants
+                self._batch_allow.difference_update(tool_names)
+                self._turn_allow.difference_update(tool_names)
+                self._session_allow.difference_update(tool_names)
+                self._save_policy()
+                print(f"Persistent deny: {', '.join(sorted(tool_names))} (persistent)")
+            else:
+                print("Persistent deny cancelled.")
             return
         self._batch_deny.update(tool_names)
 
@@ -1608,23 +1622,39 @@ class OpenRouterAgentCLI:
             self._log("[permission] No response; denied once.")
             return False
         if choice == "a":
-            self.policy.allow.add(tool_name)
-            self.policy.deny.discard(tool_name)
-            # Clear opposing ephemeral denies
-            self._batch_deny.discard(tool_name)
-            self._turn_deny.discard(tool_name)
-            self._session_deny.discard(tool_name)
-            self._save_policy()
-            return True
+            confirm = (await self._read_prompt(
+                "Type 'yes' to persist this allowance across sessions and working directories: "
+            )).strip().lower()
+            if confirm == "yes":
+                self.policy.allow.add(tool_name)
+                self.policy.deny.discard(tool_name)
+                # Clear opposing ephemeral denies
+                self._batch_deny.discard(tool_name)
+                self._turn_deny.discard(tool_name)
+                self._session_deny.discard(tool_name)
+                self._save_policy()
+                print(f"Persistent allow: {tool_name} (persistent)")
+                return True
+            else:
+                print("Persistent allow cancelled.")
+                return False
         if choice == "d":
-            self.policy.deny.add(tool_name)
-            self.policy.allow.discard(tool_name)
-            # Clear opposing ephemeral grants
-            self._batch_allow.discard(tool_name)
-            self._turn_allow.discard(tool_name)
-            self._session_allow.discard(tool_name)
-            self._save_policy()
-            return False
+            confirm = (await self._read_prompt(
+                "Type 'yes' to persist this denial across sessions and working directories: "
+            )).strip().lower()
+            if confirm == "yes":
+                self.policy.deny.add(tool_name)
+                self.policy.allow.discard(tool_name)
+                # Clear opposing ephemeral grants
+                self._batch_allow.discard(tool_name)
+                self._turn_allow.discard(tool_name)
+                self._session_allow.discard(tool_name)
+                self._save_policy()
+                print(f"Persistent deny: {tool_name} (persistent)")
+                return False
+            else:
+                print("Persistent deny cancelled.")
+                return False
         if choice == "b":
             self._batch_allow.add(tool_name)
             return True
