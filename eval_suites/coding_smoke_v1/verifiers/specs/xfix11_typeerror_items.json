@@ -1,0 +1,6 @@
+{
+ "script_name": "pairs.py",
+ "data_name": "routes.json",
+ "data_sha256": "91cea03dbc87dd3dbe06a0399ab693756cb08e6fd217b42780296a954c4cd308",
+ "expected_stdout": "a 1\nb 2"
+}

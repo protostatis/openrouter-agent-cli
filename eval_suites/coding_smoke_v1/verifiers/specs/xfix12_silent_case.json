@@ -1,0 +1,6 @@
+{
+ "script_name": "domains.py",
+ "data_name": "emails.txt",
+ "data_sha256": "53e0984f6541b86b997345a407e62026382aa7a75fb07c7869e56c3b2f432a58",
+ "expected_stdout": "UNIQUE: 3"
+}

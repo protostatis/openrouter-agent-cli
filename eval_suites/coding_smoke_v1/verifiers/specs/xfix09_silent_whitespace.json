@@ -1,0 +1,6 @@
+{
+ "script_name": "uniq.py",
+ "data_name": "signups.txt",
+ "data_sha256": "9122dffae25f1b3b1f5eaff876a77b9020569ae9dac85e2faf7151d89d7c8e4f",
+ "expected_stdout": "UNIQUE: 3"
+}

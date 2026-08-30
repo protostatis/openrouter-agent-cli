@@ -1,0 +1,6 @@
+{
+ "script_name": "cubes.py",
+ "data_name": "bounds.json",
+ "data_sha256": "903c540936fe762edee4df3fd1b388884ed068fcff00ec2b3b3910dc28523757",
+ "expected_stdout": "225"
+}

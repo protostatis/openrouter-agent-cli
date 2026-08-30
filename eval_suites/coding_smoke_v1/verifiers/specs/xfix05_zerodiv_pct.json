@@ -1,0 +1,6 @@
+{
+ "script_name": "pct.py",
+ "data_name": "survey.json",
+ "data_sha256": "6025e1e912c829d38512ca729e1d6b32aec604037ed030ca877d10478b89a7ee",
+ "expected_stdout": "yes 100 %\nno 0 %"
+}

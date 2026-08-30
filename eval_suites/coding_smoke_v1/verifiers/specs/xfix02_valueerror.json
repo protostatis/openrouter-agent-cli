@@ -1,0 +1,6 @@
+{
+ "script_name": "stock.py",
+ "data_name": "quantities.json",
+ "data_sha256": "3f08af69b79b0c1f0138148104be1d5b4a8fc8171f57d0644ac35dfceab94b88",
+ "expected_stdout": "TOTAL: 6.5"
+}

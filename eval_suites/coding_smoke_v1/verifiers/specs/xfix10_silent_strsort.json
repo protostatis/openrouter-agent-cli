@@ -1,0 +1,6 @@
+{
+ "script_name": "top.py",
+ "data_name": "scores.json",
+ "data_sha256": "beb6075c3029ff909b2753ef686cc418ab15c7aa0c56f7dec6f4836b0aef88b2",
+ "expected_stdout": "TOP: bob"
+}
