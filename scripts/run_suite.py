@@ -20,6 +20,10 @@ import argparse
 import json
 from pathlib import Path
 
+from openrouter_agent_cli.cli import _load_dotenv
+
+_load_dotenv(None)
+
 from openrouter_agent_cli.eval.compare import render_report
 from openrouter_agent_cli.eval.runner import Profile, SuiteRunner
 from openrouter_agent_cli.eval.suite import load_suite
@@ -27,10 +31,14 @@ from openrouter_agent_cli.eval.suite import load_suite
 
 def _load_profile(name: str, path: str) -> Profile:
     p = Path(path)
-    data = json.loads(p.read_text(encoding="utf-8"))
+    text = p.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return Profile(name=name, prompt=text.strip())  # plain prompt file
     if isinstance(data, dict) and "responses" in data:
         return Profile(name=name, prompt="(mock-script driven)", mock_script=data)
-    return Profile(name=name, prompt=p.read_text(encoding="utf-8").strip())
+    return Profile(name=name, prompt=text.strip())
 
 
 def main() -> int:
@@ -39,7 +47,6 @@ def main() -> int:
     ap.add_argument(
         "--profile",
         action="append",
-        required=True,
         dest="profiles",
         metavar="NAME=PATH",
         help="profile as NAME=(mock-script.json | prompt.md); repeatable",
@@ -47,23 +54,45 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="OpenRouter model id (real profiles)")
     ap.add_argument("--eval-dir", default=None, help="evaluation output directory")
     ap.add_argument("--max-turns", type=int, default=10)
+    ap.add_argument("--tasks", default=None,
+                    help="comma-separated task ids to run (default: all)")
+    ap.add_argument("--report-only", action="store_true",
+                    help="print the merged report from existing records and exit")
     args = ap.parse_args()
+
+    suite = load_suite(args.suite)
+    if args.report_only:
+        from openrouter_agent_cli.eval.records import load_records
+        runs_path = (Path(args.eval_dir) if args.eval_dir else Path.cwd() / ".agent-eval") / "runs" / f"{suite.suite_id}.jsonl"
+        print(render_report(load_records(runs_path)))
+        return 0
+    if args.tasks:
+        wanted = {t.strip() for t in args.tasks.split(",")}
+        missing = wanted - {t.id for t in suite.tasks}
+        if missing:
+            raise SystemExit(f"unknown task ids: {sorted(missing)}")
+        suite.tasks = [t for t in suite.tasks if t.id in wanted]
 
     profiles: list[Profile] = []
     for spec in args.profiles:
-        name, _, path = spec.partition("=")
-        if not name or not path:
-            raise SystemExit(f"bad --profile {spec!r}; expected NAME=PATH")
+        name, _, path_and_model = spec.partition("=")
+        if not name or not path_and_model:
+            raise SystemExit(f"bad --profile {spec!r}; expected NAME=PATH[@MODEL]")
+        path, _, model_override = path_and_model.partition("@")
+        if not path:
+            raise SystemExit(f"bad --profile {spec!r}; missing PATH")
         profile = _load_profile(name, path)
-        if not profile.uses_mock:
-            if not args.model:
+        if profile.uses_mock:
+            if model_override:
+                raise SystemExit(f"profile {name!r} is a mock; @MODEL not allowed")
+        else:
+            profile.model = model_override or args.model or ""
+            if not profile.model:
                 raise SystemExit(
-                    f"profile {name!r} is a real prompt; --model is required"
+                    f"profile {name!r} is a real prompt; give @MODEL or --model"
                 )
-            profile.model = args.model
         profiles.append(profile)
 
-    suite = load_suite(args.suite)
     runner = SuiteRunner(
         suite,
         profiles,

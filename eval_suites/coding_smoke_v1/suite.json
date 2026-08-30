@@ -7,7 +7,12 @@
       "cluster_id": "greet",
       "prompt": "Create a file named greet.py in the current directory containing a function greet() that returns the exact string 'hello from greet'. Then create test_greet.py that imports it and asserts the return value. Do not run the tests.",
       "setup": [
-        {"write_file": {"path": "README.md", "content": "# fixture workspace\n"}}
+        {
+          "write_file": {
+            "path": "README.md",
+            "content": "# fixture workspace\n"
+          }
+        }
       ],
       "verifier": {
         "command": "python3 ./verifiers/verify_greet.py",
@@ -19,10 +24,41 @@
       "cluster_id": "sumlib",
       "prompt": "The file sumlib.py has a function add(a, b) that returns a - b. Fix it so add returns a + b, then create test_sumlib.py that asserts add(2, 3) == 5. Do not run the tests.",
       "setup": [
-        {"write_file": {"path": "sumlib.py", "content": "def add(a, b):\n    return a - b\n"}}
+        {
+          "write_file": {
+            "path": "sumlib.py",
+            "content": "def add(a, b):\n    return a - b\n"
+          }
+        }
       ],
       "verifier": {
         "command": "python3 ./verifiers/verify_sumlib.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "clamp",
+      "cluster_id": "clamp",
+      "prompt": "Create clamp.py containing a function clamp(value, low, high) that returns value limited to the range [low, high]. Also create test_clamp.py that imports it and asserts clamp(5, 1, 3) == 3 and clamp(0, 1, 3) == 1. Do not run the tests.",
+      "verifier": {
+        "command": "python3 ./verifiers/verify_clamp.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "sum_upto_fix",
+      "cluster_id": "sum_upto_fix",
+      "prompt": "The file sumlib2.py contains sum_upto(n), which is supposed to return 1 + 2 + ... + n, but it currently returns the sum up to n-1. Fix the function, and create test_sum_upto.py that imports it and asserts sum_upto(3) == 6. Do not run the tests.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "sumlib2.py",
+            "content": "def sum_upto(n):\n    return sum(range(n))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_sum_upto.py",
         "timeout_s": 30
       }
     }
