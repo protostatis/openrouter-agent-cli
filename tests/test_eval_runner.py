@@ -151,3 +151,23 @@ def test_duplicate_run_id_verdict_is_immutable(tmp_path: Path, suite: Path) -> N
     with pytest.raises(ValueError):
         update_verdict(runner.runs_path, rid, "task_fail", "cheating")
     assert load_records(runner.runs_path)[0]["verdict"] == "pass"
+
+
+def test_run_suite_script(tmp_path: Path, suite: Path) -> None:
+    """The CLI entry point runs a full mock campaign and prints a report."""
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            sys.executable, str(repo / "scripts" / "run_suite.py"),
+            "--suite", str(suite),
+            "--profile", f"worker={repo / 'eval_suites' / 'mock_worker.json'}",
+            "--eval-dir", str(tmp_path / "eval"),
+        ],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert "pass=2" in proc.stdout          # both tasks pass
+    assert "not a general ranking" in proc.stdout

@@ -209,6 +209,10 @@ class SuiteRunner:
         self.cleanup_workspaces(records)
         return records
 
+    def run_and_verify_sync(self) -> list[dict[str, Any]]:
+        """Synchronous convenience wrapper (scripts, tests)."""
+        return asyncio.run(self.run_and_verify())
+
 
 def run_suite(
     suite: Suite, profiles: list[Profile], **kwargs: Any
