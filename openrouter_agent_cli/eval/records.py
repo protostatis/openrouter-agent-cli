@@ -92,7 +92,7 @@ def update_verdict(
     path: Path, run_id: str, verdict: str, evidence: str
 ) -> dict[str, Any]:
     """Fill the verdict on an existing record. Rewrite-in-place is safe because
-    verdict assignment is idempotent per run_id and the file is campaign-local.
+    verdict assignment is rejected outright per run_id and the file is campaign-local.
     Raises if the run_id is unknown or already has a different verdict."""
     rows = load_records(path)
     hits = [r for r in rows if r.get("run_id") == run_id]

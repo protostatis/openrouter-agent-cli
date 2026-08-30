@@ -136,7 +136,7 @@ def leaderboard(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 else:
                     comparison = (
                         f"no reliable difference vs leader "
-                        f"(P({name} beats {leader})={entry['p_a_gt_b']:.2f}); add tasks"
+                        f"(P({name} beats {leader})={p_name_beats_leader:.2f}); add tasks"
                     )
         rows.append(
             {

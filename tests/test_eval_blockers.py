@@ -81,3 +81,23 @@ def test_p_value_orientation_reported_for_each_profile():
     # alpha is alphabetically first; diff = alpha - zeta = +1 -> P(alpha beats zeta)=1
     line = next(l for l in text.splitlines() if "alpha vs zeta" in l)
     assert "P(alpha beats zeta)=1.00" in line
+
+
+def test_leaderboard_probability_orientation_in_rendered_report():
+    """The leaderboard (not just the uncertainty renderer) must label P(name
+    beats leader) correctly for BOTH alphabetical orders, in the
+    non-significant branch where the original bug lived."""
+    from openrouter_agent_cli.eval.compare import render_report
+    records = [
+        _rec("t1", "alpha", "pass", "a1"),
+        _rec("t1", "zeta", "pass", "z1"),
+        _rec("t2", "alpha", "task_fail", "a2"),
+        _rec("t2", "zeta", "task_fail", "z2"),
+        _rec("t3", "alpha", "pass", "a3"),
+        _rec("t3", "zeta", "task_fail", "z3"),
+        _rec("t4", "alpha", "task_fail", "a4"),
+        _rec("t4", "zeta", "pass", "z4"),
+    ]
+    report = render_report(records)
+    zline = next(l for l in report.splitlines() if l.strip().startswith("2. zeta"))
+    assert "P(zeta beats alpha)=0.63" in zline, zline

@@ -32,9 +32,10 @@ wins. Results are suite-specific.
   alternate; profile order randomized within each task). 12 × 4 × 2 = 96
   attempts. Replicates estimate run variability; they do not add independent
   task count.
-- Model route, returned model identifier, parameters, timestamps, and tool
-  versions recorded in every run record; collection completed in a short
-  window to bound provider/release drift.
+- Model name, timestamps, token usage, and per-tool outcomes are recorded in
+  every run record (returned route/identifier, sampling parameters, and tool
+  versions are NOT captured by the current record schema); collection
+  completed in a short window to bound provider/release drift.
 
 ## Primary statistic (predeclared, single primary family)
 
