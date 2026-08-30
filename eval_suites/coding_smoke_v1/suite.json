@@ -297,6 +297,46 @@
         "command": "python3 ./verifiers/verify_hard_normalize_csv.py",
         "timeout_s": 30
       }
+    },
+    {
+      "id": "hard_crash_counts",
+      "cluster_id": "hard_crash_counts",
+      "prompt": "Running `python3 count_regions.py` crashes. Fix count_regions.py so it runs successfully and prints each region with its order count, sorted alphabetically. Do not modify orders.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "orders.json",
+            "content": "[\n {\n  \"region\": \"east\",\n  \"amount\": 10\n },\n {\n  \"region\": \"west\",\n  \"amount\": 20\n },\n {\n  \"region\": \"east\"\n },\n {\n  \"region\": \"west\",\n  \"amount\": 5\n }\n]\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "count_regions.py",
+            "content": "import json\n\nwith open(\"orders.json\") as fh:\n    orders = json.load(fh)\n\ncounts = {}\nfor order in orders:\n    counts[order[\"region\"]] += 1\n\nfor region in sorted(counts):\n    print(region, counts[region])\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_crash_counts.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_ledger_refunds",
+      "cluster_id": "hard_ledger_refunds",
+      "prompt": "ledger2.jsonl starts with lines giving each account's starting balance, followed by transactions in order. Rules: a 'withdraw' must be skipped entirely if it would take the account below zero (balance unchanged); a 'refund' always applies. Process transactions strictly in order and write every account's final balance to final_balances.json as a single JSON object mapping account name to integer.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "ledger2.jsonl",
+            "content": "{\"account\": \"x\", \"balance\": 80}\n{\"account\": \"y\", \"balance\": 60}\n{\"account\": \"x\", \"type\": \"withdraw\", \"amount\": 30}\n{\"account\": \"y\", \"type\": \"refund\", \"amount\": 20}\n{\"account\": \"y\", \"type\": \"withdraw\", \"amount\": 90}\n{\"account\": \"x\", \"type\": \"withdraw\", \"amount\": 50}\n{\"account\": \"x\", \"type\": \"refund\", \"amount\": 30}\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_ledger_refunds.py",
+        "timeout_s": 30
+      }
     }
   ]
 }
