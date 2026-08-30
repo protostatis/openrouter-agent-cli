@@ -33,12 +33,14 @@ try:
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.document import Document
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.patch_stdout import patch_stdout
 except ImportError:  # pragma: no cover
     PromptSession = None  # type: ignore
     Completer = None  # type: ignore
     Completion = None  # type: ignore
     Document = None  # type: ignore
     FileHistory = None  # type: ignore
+    patch_stdout = None  # type: ignore
 
 # Model, shell, and web output are untrusted. Remove ANSI CSI/OSC sequences and
 # C0/C1 control characters before anything is rendered in the terminal. Newlines
@@ -510,6 +512,8 @@ class OpenRouterAgentCLI:
         }
         self._discovery_session: DiscoverySession | None = None
         self._discovery_poisoned = False
+        self._debug = False
+        self._last_idle_log = 0.0
 
         self.session_root = Path(
             os.environ.get(
@@ -526,6 +530,15 @@ class OpenRouterAgentCLI:
     def _log(self, message: str, *, end: str = "\n", style: str | None = None) -> None:
         target = sys.stderr if self.non_interactive_mode else sys.stdout
         safe = _strip_control_chars(message)
+        if getattr(self, "_debug", False):
+            ts = time.strftime("%H:%M:%S")
+            caller = ""
+            try:
+                import inspect
+                caller = inspect.stack()[2].function
+                safe = f"[{ts} {caller}] {safe}"
+            except Exception:
+                safe = f"[{ts}] {safe}"
         if (
             not self.non_interactive_mode
             and style
@@ -537,12 +550,19 @@ class OpenRouterAgentCLI:
         print(safe, file=target, end=end)
 
     def _set_activity(self, state: str, detail: str = "") -> None:
+        prev = getattr(self, "_active_state", None)
         self._active_state = state
         self._active_state_since = time.monotonic()
         suffix = f": {detail}" if detail else ""
         style = "yellow" if state in {"awaiting approval", "awaiting batch approval", "retrying"} else "cyan"
         if state == "idle":
             style = "dim"
+            # Debounce idle spam: suppress repeated idle within 1s unless debug
+            now = time.monotonic()
+            if prev == "idle" and not getattr(self, "_debug", False):
+                if now - getattr(self, "_last_idle_log", 0) < 1.0:
+                    return
+            self._last_idle_log = now
         self._log(f"[status] {state}{suffix}", style=style)
 
     def _clear_terminal(self) -> None:
@@ -2954,6 +2974,11 @@ def main() -> None:
         "--env-file",
         help="Path to .env file to load (allowlisted keys only, no override).",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (timestamps + idle instrumentation).",
+    )
     args = parser.parse_args()
     # If --env-file was passed and not already loaded via early peek (e.g. quoted), ensure loaded
     if args.env_file and args.env_file != _explicit_env:
@@ -3000,6 +3025,7 @@ def main() -> None:
         max_discover=args.max_discover,
         max_rounds=args.max_rounds,
     )
+    cli._debug = bool(args.debug)
     if args.allow_discovery:
         # Command-line opt-in is scoped to this process; use /allow discover
         # when persistent permission is really intended.
