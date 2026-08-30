@@ -191,7 +191,7 @@
         {
           "write_file": {
             "path": "test_prices_app.py",
-            "content": "import unittest\nfrom prices_app import total\n\nclass TestTotal(unittest.TestCase):\n    def test_total_rounds_to_cents(self):\n        self.assertEqual(total([{\"price\": 19.99, \"qty\": 3}]), 59.97)\n\n    def test_total_empty_cart(self):\n        self.assertEqual(total([]), 0)\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+            "content": "import unittest\nfrom prices_app import total\n\nclass TestTotal(unittest.TestCase):\n    def test_total_rounds_to_cents(self):\n        self.assertEqual(total([{\"price\": 19.99, \"qty\": 7}]), 139.93)\n\n    def test_total_empty_cart(self):\n        self.assertEqual(total([]), 0)\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
           }
         }
       ],
