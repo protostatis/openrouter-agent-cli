@@ -111,6 +111,10 @@ def render_report(records: list[dict[str, Any]]) -> str:
         "Note: descriptive summary of THIS suite run only; it is not a general "
         "ranking of the profiles."
     )
+    from .uncertainty import render_uncertainty
+
+    lines.append("")
+    lines.extend(render_uncertainty(records))
     return "\n".join(lines)
 
 
