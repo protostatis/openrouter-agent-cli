@@ -77,6 +77,93 @@ def cost_table(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return table
 
 
+def leaderboard(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Profiles ranked by verified pass rate, with uncertainty vs the leader.
+
+    Rows: profile, passes/n, Wilson 95% CI, P(this profile beats the current
+    leader) from the paired task bootstrap. A profile "leads" only if its
+    interval advantage is real on this suite; ties resolve to 'no reliable
+    difference yet'. Suite-specific by construction.
+    """
+    from .uncertainty import paired_bootstrap, wilson_interval
+
+    per_profile: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for r in records:
+        verdict = r.get("verdict")
+        if verdict in ("pass", "task_fail"):
+            bucket = per_profile[r["profile"]["name"]]
+            bucket[0] += verdict == "pass"
+            bucket[1] += 1
+    if not per_profile:
+        return []
+    boot = paired_bootstrap(records)
+
+    def sort_key(name: str) -> tuple[float, float]:
+        passes, n = per_profile[name]
+        interval = wilson_interval(passes, n) or (0.0, 0.0)
+        return (-(passes / n if n else 0.0), -(interval[0] + interval[1]) / 2)
+
+    ranked = sorted(per_profile, key=sort_key)
+    leader = ranked[0]
+    rows: list[dict[str, Any]] = []
+    for name in ranked:
+        passes, n = per_profile[name]
+        interval = wilson_interval(passes, n)
+        if name == leader:
+            comparison = "leader (best verified pass rate on this suite)"
+        else:
+            key = "|".join(sorted((name, leader)))
+            entry = (boot.get("pairs") or {}).get(key)
+            if entry is None:
+                comparison = "insufficient paired data vs leader"
+            else:
+                significant = entry["ci"][0] > 0 or entry["ci"][1] < 0
+                if significant:
+                    winner = (
+                        name
+                        if (entry["mean_diff"] > 0) == (name == key.split("|")[0])
+                        else leader
+                    )
+                    comparison = (
+                        f"significantly behind leader (P({name} beats {leader})="
+                        f"{entry['p_a_gt_b']:.2f})"
+                        if winner == leader
+                        else f"significantly AHEAD of leader (P({name} beats {leader})="
+                        f"{entry['p_a_gt_b']:.2f}) — leader is stale"
+                    )
+                else:
+                    comparison = (
+                        f"no reliable difference vs leader "
+                        f"(P({name} beats {leader})={entry['p_a_gt_b']:.2f}); add tasks"
+                    )
+        rows.append(
+            {
+                "profile": name,
+                "passes": passes,
+                "attempts": n,
+                "pass_rate": round(passes / n, 3) if n else None,
+                "wilson_95": interval,
+                "comparison": comparison,
+            }
+        )
+    return rows
+
+
+def render_leaderboard(records: list[dict[str, Any]]) -> str:
+    rows = leaderboard(records)
+    if not rows:
+        return "## Leaderboard: no verified attempts yet"
+    lines = ["## Leaderboard (this suite only)", "(ranked by verified pass rate; uncertainty vs the leader)"]
+    for i, row in enumerate(rows, 1):
+        interval = row["wilson_95"]
+        ci = f"[{interval[0]:.2f}, {interval[1]:.2f}]" if interval else "n/a"
+        lines.append(
+            f"  {i}. {row['profile']}: {row['passes']}/{row['attempts']} "
+            f"(95% CI {ci}) — {row['comparison']}"
+        )
+    return "\n".join(lines)
+
+
 def render_report(records: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     counts = _outcome_counts(records)
@@ -115,6 +202,8 @@ def render_report(records: list[dict[str, Any]]) -> str:
 
     lines.append("")
     lines.extend(render_uncertainty(records))
+    lines.append("")
+    lines.append(render_leaderboard(records))
     return "\n".join(lines)
 
 
