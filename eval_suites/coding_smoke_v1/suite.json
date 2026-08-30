@@ -1,0 +1,30 @@
+{
+  "schema_version": "agent-eval-suite-v1",
+  "suite_id": "coding-smoke-v1",
+  "tasks": [
+    {
+      "id": "greet",
+      "cluster_id": "greet",
+      "prompt": "Create a file named greet.py in the current directory containing a function greet() that returns the exact string 'hello from greet'. Then create test_greet.py that imports it and asserts the return value. Do not run the tests.",
+      "setup": [
+        {"write_file": {"path": "README.md", "content": "# fixture workspace\n"}}
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_greet.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "sumlib",
+      "cluster_id": "sumlib",
+      "prompt": "The file sumlib.py has a function add(a, b) that returns a - b. Fix it so add returns a + b, then create test_sumlib.py that asserts add(2, 3) == 5. Do not run the tests.",
+      "setup": [
+        {"write_file": {"path": "sumlib.py", "content": "def add(a, b):\n    return a - b\n"}}
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_sumlib.py",
+        "timeout_s": 30
+      }
+    }
+  ]
+}
