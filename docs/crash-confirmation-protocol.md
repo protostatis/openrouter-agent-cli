@@ -53,9 +53,11 @@ wins. Results are suite-specific.
 
 - Tasks where every profile passes or every profile fails contribute no sign
   information; they are reported as ties, never removed after collection.
-- An attempt whose verifier returns `infrastructure_error` is re-run once; a
-  second infrastructure error counts as a failure for that attempt and is
-  reported separately from task failures.
+- An attempt whose verifier returns `infrastructure_error` counts as a
+  failure for that attempt and is reported separately from task failures.
+  (Automatic re-run-once was specified here but is not implemented in the
+  collection runner; manual re-collections were used and are recorded as
+  separate attempts.)
 - A task whose verifier is later found defective is excluded with the reason
   logged; its partial data is discarded entirely (no partial credit).
 
