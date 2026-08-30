@@ -119,9 +119,10 @@ def test_paired_counterbalanced_schedule_and_report(tmp_path: Path, suite: Path)
     assert verdicts[("greet", "worker")] == "pass"
     assert verdicts[("greet", "lazy")] == "task_fail"
     tally = paired_tally(records)
-    assert tally[("lazy", "worker")]["a_only_pass"] == 0   # lazy never passes
-    assert tally[("lazy", "worker")]["b_only_pass"] == 1   # worker: greet only
-    assert tally[("lazy", "worker")]["neither_pass"] == 1  # sumlib beats both
+    assert tally[("lazy", "worker")]["a_only_pass"] == 0          # lazy never passes
+    assert tally[("lazy", "worker")]["b_only_pass"] == 1          # worker: greet only
+    # every other task defeats both profiles (the mock only knows greet):
+    assert tally[("lazy", "worker")]["neither_pass"] == len(loaded.tasks) - 1
     report = render_report(records)
     assert "worker" in report and "task_fail" in report
     assert "not a general ranking" in report  # honesty disclaimer present
