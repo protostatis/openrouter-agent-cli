@@ -113,6 +113,92 @@
         "command": "python3 ./verifiers/verify_config_update.py",
         "timeout_s": 30
       }
+    },
+    {
+      "id": "hard_stale_refactor",
+      "cluster_id": "hard_stale_refactor",
+      "prompt": "pricing.py applies a discount where percent is out of 100 (apply_discount(100, 50) halves the price). Change apply_discount so percent is instead a fraction (apply_discount(100, 0.5) must return 50.0). Beware that comments in the file may be stale. Everything that builds on discounting must keep working correctly.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "pricing.py",
+            "content": "# NOTE: percent is a fraction (0.15 = 15%) -- documentation may be stale.\n\ndef apply_discount(price, percent):\n    return round(price * (1 - percent / 100), 2)\n\n\ndef apply_discount_all(prices, percent):\n    return [apply_discount(p, percent) for p in prices]\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_stale_refactor.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_shared_constant",
+      "cluster_id": "hard_shared_constant",
+      "prompt": "Change the retry policy everywhere so the system retries up to 5 times. config.py exposes the retry count and client.py reports it in fetch(). Update whatever is needed so the change is consistent across modules, and keep client.py reading the count from config rather than duplicating it. README.md is informational only.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "config.py",
+            "content": "MAX_RETRIES = 3\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "client.py",
+            "content": "import config\n\n\ndef fetch(attempt):\n    return f\"attempt {attempt} of {config.MAX_RETRIES}\"\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "README.md",
+            "content": "Retries: 3\n\nDemo service.\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_shared_constant.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_ledger",
+      "cluster_id": "hard_ledger",
+      "prompt": "ledger.jsonl starts with three lines giving each account's starting balance, followed by transactions in order. Rules: a 'withdraw' must be skipped entirely if it would take that account below zero (balance unchanged); 'deposit' always applies. Process transactions strictly in order and write the final balance of every account to final_balances.json as a single JSON object mapping account name to integer balance.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "ledger.jsonl",
+            "content": "{\"account\": \"a\", \"balance\": 100}\n{\"account\": \"b\", \"balance\": 50}\n{\"account\": \"c\", \"balance\": 0}\n{\"account\": \"a\", \"type\": \"withdraw\", \"amount\": 30}\n{\"account\": \"b\", \"type\": \"withdraw\", \"amount\": 80}\n{\"account\": \"c\", \"type\": \"deposit\", \"amount\": 40}\n{\"account\": \"a\", \"type\": \"withdraw\", \"amount\": 70}\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_ledger.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_fix_failing_test",
+      "cluster_id": "hard_fix_failing_test",
+      "prompt": "test_prices_app.py currently fails. Fix prices_app.py so the test passes. Do not modify test_prices_app.py in any way.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "prices_app.py",
+            "content": "def total(cart):\n    return sum(item[\"price\"] * item[\"qty\"] for item in cart)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "test_prices_app.py",
+            "content": "import unittest\nfrom prices_app import total\n\nclass TestTotal(unittest.TestCase):\n    def test_total_rounds_to_cents(self):\n        self.assertEqual(total([{\"price\": 19.99, \"qty\": 3}]), 59.97)\n\n    def test_total_empty_cart(self):\n        self.assertEqual(total([]), 0)\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_fix_failing_test.py",
+        "timeout_s": 60
+      }
     }
   ]
 }
