@@ -199,6 +199,104 @@
         "command": "python3 ./verifiers/verify_hard_fix_failing_test.py",
         "timeout_s": 60
       }
+    },
+    {
+      "id": "hard_api_rename",
+      "cluster_id": "hard_api_rename",
+      "prompt": "Rename the save_note function in storage.py to write_note (update the definition), and update every caller to use the new name. Behavior must stay exactly the same. README.md may not list all callers \u2014 search the codebase for usages.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "storage.py",
+            "content": "import pathlib\n\n\ndef save_note(note_id, text):\n    path = pathlib.Path(\"notes\") / f\"{note_id}.txt\"\n    path.parent.mkdir(exist_ok=True)\n    path.write_text(text)\n    return str(path)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "app.py",
+            "content": "from storage import save_note\n\n\ndef add_note(note_id, text):\n    return save_note(note_id, text)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "archive.py",
+            "content": "from storage import save_note\n\n\ndef archive_old(note_id, text):\n    return save_note(f\"old-{note_id}\", text)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "README.md",
+            "content": "# Notes service\n\napp.py adds notes via storage.save_note.\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_api_rename.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_crashing_script",
+      "cluster_id": "hard_crashing_script",
+      "prompt": "Running `python3 report.py` crashes. Fix report.py so it runs successfully and prints the correct total. Do not modify sales.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "sales.json",
+            "content": "[\n {\n  \"item\": \"widget\",\n  \"amount\": 100.0\n },\n {\n  \"item\": \"gadget\",\n  \"amount\": 45.5\n },\n {\n  \"item\": \"doohickey\",\n  \"amount\": \"12.50\"\n },\n {\n  \"item\": \"gizmo\",\n  \"amount\": 87.5\n }\n]\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "report.py",
+            "content": "import json\n\nwith open(\"sales.json\") as fh:\n    sales = json.load(fh)\n\ntotal = sum(row[\"amount\"] for row in sales)\nprint(f\"TOTAL: {total:.2f}\")\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_crashing_script.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_docs_conflict",
+      "cluster_id": "hard_docs_conflict",
+      "prompt": "Change the name formatting in formatter.py so format_name('Ada', 'Lovelace') returns 'Ada Lovelace'. Note: docs.md still describes the OLD behavior and is out of date \u2014 after changing the code, update docs.md so it documents the new behavior.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "formatter.py",
+            "content": "def format_name(first, last):\n    return f\"{last}, {first}\"\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "docs.md",
+            "content": "# Formatter\n\nNames are formatted as 'Last, First'.\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_docs_conflict.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_normalize_csv",
+      "cluster_id": "hard_normalize_csv",
+      "prompt": "Transform messy.csv into clean.json: a JSON array of objects, one per data row, each with keys name, email, joined. Rules: trim leading/trailing spaces from every field; email must be lowercase; joined dates appear as either ISO (yyyy-mm-dd) or US (mm/dd/yyyy) \u2014 output every date as ISO yyyy-mm-dd.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "messy.csv",
+            "content": "name,email,joined\nAda Lovelace ,  A.LOVELACE@example.com,2026-01-05\n Grace Hopper,grace.hopper@Example.COM,05/02/2026\nAlan Turing ,ALAN.TURING@example.com ,03/03/2026\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_normalize_csv.py",
+        "timeout_s": 30
+      }
     }
   ]
 }
