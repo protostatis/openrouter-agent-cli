@@ -532,7 +532,7 @@ class OpenRouterAgentCLI:
             and Console is not None
             and sys.stdout.isatty()
         ):
-            Console(file=target, soft_wrap=True).print(f"[{style}]{safe}[/{style}]", end=end)
+            Console(file=target, soft_wrap=True).print(safe, style=style, end=end, markup=False)
             return
         print(safe, file=target, end=end)
 
