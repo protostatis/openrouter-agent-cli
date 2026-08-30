@@ -2918,7 +2918,7 @@ def _load_system_prompt(path: str | None) -> str:
         raise RuntimeError(f"Failed to read system prompt file {p}: {e}") from e
 
 
-def main() -> None:
+def main() -> int:
     # Pre-load default .env (allowlisted) so OPENROUTER_API_KEY/MODEL are available for defaults
     _load_dotenv()
     # Early peek for explicit --env-file without consuming args
@@ -2982,6 +2982,16 @@ def main() -> None:
         help="Path to a custom system prompt file.",
     )
     parser.add_argument(
+        "--eval-report",
+        action="store_true",
+        help="Print the evaluation report (.agent-eval) and exit.",
+    )
+    parser.add_argument(
+        "--eval-dir",
+        default=".agent-eval",
+        help="Evaluation directory for --eval-report (default: .agent-eval).",
+    )
+    parser.add_argument(
         "--prompt",
         "-p",
         help="Run a single prompt, emit the assistant reply on stdout, and exit.",
@@ -3025,6 +3035,10 @@ def main() -> None:
         help="Enable debug logging (timestamps + idle instrumentation).",
     )
     args = parser.parse_args()
+    if getattr(args, "eval_report", False):
+        from openrouter_agent_cli.eval.report import main as _eval_report_main
+
+        return _eval_report_main(["--eval-dir", args.eval_dir])
     # If --env-file was passed and not already loaded via early peek (e.g. quoted), ensure loaded
     if args.env_file and args.env_file != _explicit_env:
         _load_dotenv(args.env_file)
@@ -3088,4 +3102,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
