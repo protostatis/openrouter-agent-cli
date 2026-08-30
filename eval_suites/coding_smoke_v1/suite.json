@@ -337,6 +337,52 @@
         "command": "python3 ./verifiers/verify_hard_ledger_refunds.py",
         "timeout_s": 30
       }
+    },
+    {
+      "id": "hard_zero_division",
+      "cluster_id": "hard_zero_division",
+      "prompt": "Running `python3 averages.py` crashes. Fix averages.py so it runs and prints one line per region that HAS orders (sorted alphabetically): the region name, a space, then its average amount. Regions with no orders are simply skipped. Do not modify orders2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "orders2.json",
+            "content": "{\n \"east\": [\n  10,\n  20\n ],\n \"west\": [],\n \"south\": [\n  5\n ]\n}\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "averages.py",
+            "content": "import json\n\nwith open(\"orders2.json\") as fh:\n    orders = json.load(fh)\n\nfor region in sorted(orders):\n    amounts = orders[region]\n    print(region, sum(amounts) / len(amounts))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_zero_division.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_silent_offbyone",
+      "cluster_id": "hard_silent_offbyone",
+      "prompt": "Running `python3 eligible.py` does not crash, but its output is wrong. The eligibility rule is: age 18 through 65, inclusive on both ends. Fix eligible.py so the printed count is correct. Do not modify attendees.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "attendees.json",
+            "content": "[\n {\n  \"name\": \"ana\",\n  \"age\": 17\n },\n {\n  \"name\": \"bob\",\n  \"age\": 18\n },\n {\n  \"name\": \"cy\",\n  \"age\": 30\n },\n {\n  \"name\": \"dee\",\n  \"age\": 64\n },\n {\n  \"name\": \"eli\",\n  \"age\": 65\n },\n {\n  \"name\": \"fay\",\n  \"age\": 66\n }\n]\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "eligible.py",
+            "content": "import json\n\nwith open(\"attendees.json\") as fh:\n    attendees = json.load(fh)\n\neligible = [a for a in attendees if 18 < a[\"age\"] < 65]\nprint(\"ELIGIBLE:\", len(eligible))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_silent_offbyone.py",
+        "timeout_s": 30
+      }
     }
   ]
 }
