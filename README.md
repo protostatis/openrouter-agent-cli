@@ -106,7 +106,6 @@ openrouter-agent --no-tools
 - `/inspect <call-id>`
 - `/sessions`
 - `/resume <id>`
-- `/cancel`
 - `/policy`
 - `/export [path]`
 

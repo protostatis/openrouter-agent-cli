@@ -132,7 +132,6 @@ SLASH_COMMANDS = [
     "/inspect",
     "/sessions",
     "/resume",
-    "/cancel",
     "/policy",
     "/export",
 ]
@@ -510,6 +509,7 @@ class OpenRouterAgentCLI:
             "total_tokens": 0,
         }
         self._discovery_session: DiscoverySession | None = None
+        self._discovery_poisoned = False
 
         self.session_root = Path(
             os.environ.get(
@@ -569,8 +569,16 @@ class OpenRouterAgentCLI:
         return max(0.0, time.monotonic() - self._active_state_since)
 
     def _effective_policy_decision(self, tool_name: str) -> str:
+        # Persistent deny takes absolute precedence
+        if tool_name in self.policy.deny:
+            return "deny"
+        # Persistent allow takes precedence over ephemeral denies
+        if tool_name in self.policy.allow:
+            return "allow"
+        # Ephemeral denies
         if tool_name in self._batch_deny or tool_name in self._turn_deny or tool_name in self._session_deny:
             return "deny"
+        # Ephemeral allows
         if tool_name in self._batch_allow or tool_name in self._turn_allow or tool_name in self._session_allow:
             return "allow"
         return self.policy.decision(tool_name)
@@ -655,6 +663,34 @@ class OpenRouterAgentCLI:
                         ),
                         file=sys.stderr,
                     )
+                stored_model = data.get("model", "")
+                if stored_model and stored_model != self.model:
+                    print(
+                        _strip_control_chars(
+                            f"[session] Model changed since last session (was {stored_model}, now {self.model}). "
+                            "Clearing ephemeral grants."
+                        ),
+                        file=sys.stderr,
+                    )
+                    self._session_allow.clear()
+                    self._session_deny.clear()
+                    self._batch_allow.clear()
+                    self._batch_deny.clear()
+                stored_workdir = data.get("workdir", "")
+                if stored_workdir:
+                    current_workdir = str(Path(self.workdir).resolve())
+                    if stored_workdir != current_workdir:
+                        print(
+                            _strip_control_chars(
+                                f"[session] Working directory changed since last session (was {stored_workdir}, now {current_workdir}). "
+                                "Clearing ephemeral grants."
+                            ),
+                            file=sys.stderr,
+                        )
+                        self._session_allow.clear()
+                        self._session_deny.clear()
+                        self._batch_allow.clear()
+                        self._batch_deny.clear()
                 return [{"role": "system", "content": self.system_prompt}] + stored
         except FileNotFoundError:
             pass
@@ -709,7 +745,12 @@ class OpenRouterAgentCLI:
                         else:
                             trimmed = trimmed[1:]
             non_system = trimmed
-        payload = {"messages": non_system, "system_prompt": self.system_prompt}
+        payload = {
+            "messages": non_system,
+            "system_prompt": self.system_prompt,
+            "model": self.model,
+            "workdir": str(Path(self.workdir).resolve()),
+        }
         try:
             self._atomic_write_text(
                 self._session_path,
@@ -963,7 +1004,7 @@ class OpenRouterAgentCLI:
         if cmd == "/clear":
             if self._prompt_session is not None:
                 choice = (
-                    await self._read_prompt("Clear this session history? [y/N] ")
+                    await self._read_prompt("Clear this session history? [yes/N] ")
                 ).strip().lower()
                 if choice not in ("y", "yes"):
                     print("Session history kept.")
@@ -1031,13 +1072,17 @@ class OpenRouterAgentCLI:
                 return True
             # Two-step confirm for persistent allow
             confirm = (await self._read_prompt(
-                f"Allow {arg} persistently across sessions and working directories? [y/N]: "
+                f"Allow {arg} persistently across sessions and working directories? [yes/N]: "
             )).strip().lower()
-            if confirm not in ("y", "yes"):
+            if confirm != "yes":
                 print("Allowance cancelled.")
                 return True
             self.policy.allow.add(arg)
             self.policy.deny.discard(arg)
+            # Clear opposing ephemeral denies
+            self._batch_deny.discard(arg)
+            self._turn_deny.discard(arg)
+            self._session_deny.discard(arg)
             self._save_policy()
             print(f"Always allow: {arg} (persistent across sessions and working directories)")
             return True
@@ -1051,13 +1096,17 @@ class OpenRouterAgentCLI:
                 return True
             # Two-step confirm for persistent deny
             confirm = (await self._read_prompt(
-                f"Deny {arg} persistently across sessions and working directories? [y/N]: "
+                f"Deny {arg} persistently across sessions and working directories? [yes/N]: "
             )).strip().lower()
-            if confirm not in ("y", "yes"):
+            if confirm != "yes":
                 print("Denyance cancelled.")
                 return True
             self.policy.deny.add(arg)
             self.policy.allow.discard(arg)
+            # Clear opposing ephemeral grants
+            self._batch_allow.discard(arg)
+            self._turn_allow.discard(arg)
+            self._session_allow.discard(arg)
             self._save_policy()
             print(f"Always deny: {arg} (persistent across sessions and working directories)")
             return True
@@ -1145,15 +1194,6 @@ class OpenRouterAgentCLI:
             self._resumed = True
             self.messages = self._load_session()
             print(f"Resumed session: {self.session_id}")
-            return True
-
-        if cmd == "/cancel":
-            task = self._active_turn_task
-            if task is None or task.done():
-                print("No active turn.")
-            else:
-                task.cancel()
-                print("Cancellation requested.")
             return True
 
         if cmd == "/export":
@@ -1504,6 +1544,10 @@ class OpenRouterAgentCLI:
         if choice == "a":
             self.policy.allow.update(tool_names)
             self.policy.deny.difference_update(tool_names)
+            # Clear opposing ephemeral denies
+            self._batch_deny.difference_update(tool_names)
+            self._turn_deny.difference_update(tool_names)
+            self._session_deny.difference_update(tool_names)
             self._save_policy()
             return
         if choice == "s":
@@ -1518,6 +1562,10 @@ class OpenRouterAgentCLI:
         if choice == "d":
             self.policy.deny.update(tool_names)
             self.policy.allow.difference_update(tool_names)
+            # Clear opposing ephemeral grants
+            self._batch_allow.difference_update(tool_names)
+            self._turn_allow.difference_update(tool_names)
+            self._session_allow.difference_update(tool_names)
             self._save_policy()
             return
         self._batch_deny.update(tool_names)
@@ -1542,11 +1590,19 @@ class OpenRouterAgentCLI:
         if choice == "a":
             self.policy.allow.add(tool_name)
             self.policy.deny.discard(tool_name)
+            # Clear opposing ephemeral denies
+            self._batch_deny.discard(tool_name)
+            self._turn_deny.discard(tool_name)
+            self._session_deny.discard(tool_name)
             self._save_policy()
             return True
         if choice == "d":
             self.policy.deny.add(tool_name)
             self.policy.allow.discard(tool_name)
+            # Clear opposing ephemeral grants
+            self._batch_allow.discard(tool_name)
+            self._turn_allow.discard(tool_name)
+            self._session_allow.discard(tool_name)
             self._save_policy()
             return False
         if choice == "b":
@@ -1720,14 +1776,25 @@ class OpenRouterAgentCLI:
                     truncated = True
                     return
 
+        workdir_resolved = Path(self.workdir).resolve()
         if root.is_file():
-            _consider_file(root)
+            # Validate the file is within workdir after resolving symlinks
+            try:
+                if file_path := root.resolve().relative_to(workdir_resolved):
+                    _consider_file(root)
+            except (ValueError, OSError):
+                pass
         else:
             for file_path in sorted(root.rglob("*")):
                 if not file_path.is_file():
                     continue
                 # Skip common large/binary-ish trees.
                 if any(part in {".git", ".venv", "node_modules", "__pycache__", "dist"} for part in file_path.parts):
+                    continue
+                # Validate the file is within workdir after resolving symlinks
+                try:
+                    file_path.resolve().relative_to(workdir_resolved)
+                except (ValueError, OSError):
                     continue
                 _consider_file(file_path)
                 if truncated:
@@ -2109,6 +2176,13 @@ class OpenRouterAgentCLI:
     def _get_discovery_session(self) -> DiscoverySession | None:
         if DiscoverySession is None:
             return None
+        if self._discovery_poisoned:
+            print(
+                "[discovery] warning: previous discover timed out; resetting session",
+                file=sys.stderr,
+            )
+            self._discovery_poisoned = False
+            self._close_discovery_session()
         if self._discovery_session is None:
             self._discovery_session = DiscoverySession(
                 binary=os.environ.get("UNBROWSER_BINARY")
@@ -2119,8 +2193,22 @@ class OpenRouterAgentCLI:
 
     def _close_discovery_session(self) -> None:
         if self._discovery_session is not None:
-            self._discovery_session.close()
+            # Try to close with a short timeout to avoid blocking if lock is held
+            session = self._discovery_session
             self._discovery_session = None
+            try:
+                # Use a thread with timeout to avoid blocking the event loop
+                import threading
+                def close_session():
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+                t = threading.Thread(target=close_session, daemon=True)
+                t.start()
+                t.join(timeout=0.5)
+            except Exception:
+                pass
 
     async def _discover(
         self, args: dict[str, Any], *, isolated: bool = False

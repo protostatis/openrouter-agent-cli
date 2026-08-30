@@ -312,7 +312,6 @@ Keep existing commands for compatibility and add:
 /sessions               List saved sessions and last activity
 /resume <id>            Switch to a saved session with confirmation
 /inspect <call-id>      View full tool request/result
-/cancel                 Cancel the active turn/tool
 /policy                 Show policy entries and their scopes
 /export [path]          Export a readable transcript
 /compact --preview      Preview what would be summarized
