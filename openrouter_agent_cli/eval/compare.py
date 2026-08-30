@@ -116,6 +116,8 @@ def leaderboard(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             entry = (boot.get("pairs") or {}).get(key)
             if entry is None:
                 comparison = "insufficient paired data vs leader"
+            elif entry.get("tied"):
+                comparison = "tied with leader on every paired task"
             else:
                 significant = entry["ci"][0] > 0 or entry["ci"][1] < 0
                 if significant:

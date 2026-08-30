@@ -63,8 +63,8 @@ def test_mock_brain_real_hands_end_to_end(tmp_path: Path, suite: Path) -> None:
     )
     records = asyncio.run(runner.run_and_verify())
 
-    # One profile x two suite tasks = two attempts, nothing dropped.
-    assert len(records) == 2
+    # One profile x every suite task = one attempt per task, nothing dropped.
+    assert len(records) == len(loaded.tasks)
     by_task = {r["task_id"]: r for r in records}
     record = by_task["greet"]
     # The mock brain's tool calls were executed for real by the engine:
@@ -79,7 +79,7 @@ def test_mock_brain_real_hands_end_to_end(tmp_path: Path, suite: Path) -> None:
     assert by_task["sumlib"]["verdict"] == "task_fail"
     # Records are factual and append-only readable:
     on_disk = load_records(runner.runs_path)
-    assert len(on_disk) == 2
+    assert len(on_disk) == len(loaded.tasks)
     assert all(r["verdict"] in ("pass", "task_fail") for r in on_disk)
     # The mock saw the real request shape (system prompt + tools):
     # (transport instance is per-attempt; check the engine received tools)
@@ -109,11 +109,10 @@ def test_paired_counterbalanced_schedule_and_report(tmp_path: Path, suite: Path)
     ]
     runner = SuiteRunner(loaded, profiles, eval_dir=tmp_path / "eval")
     schedule = runner.build_schedule()
-    # 2 tasks x 2 profiles, paired task-major:
-    assert len(schedule) == 4
-    first_pairs = [p.name for _, p, _ in schedule[:2]]
-    assert first_pairs == ["worker", "lazy"]      # task 0 order
-    assert [p.name for _, p, _ in schedule[2:]] == ["lazy", "worker"]  # rotated
+    # tasks x profiles, paired task-major with rotation:
+    assert len(schedule) == len(loaded.tasks) * 2
+    assert [p.name for _, p, _ in schedule[:2]] == ["worker", "lazy"]  # task 0
+    assert [p.name for _, p, _ in schedule[2:4]] == ["lazy", "worker"]  # rotated
 
     records = asyncio.run(runner.run_and_verify())
     verdicts = {(r["task_id"], r["profile"]["name"]): r["verdict"] for r in records}

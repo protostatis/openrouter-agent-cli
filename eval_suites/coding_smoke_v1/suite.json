@@ -61,6 +61,58 @@
         "command": "python3 ./verifiers/verify_sum_upto.py",
         "timeout_s": 30
       }
+    },
+    {
+      "id": "dedup",
+      "cluster_id": "dedup",
+      "prompt": "Create dedup.py containing a function dedup(items) that returns a new list with duplicate values removed, keeping each value's first occurrence and preserving order. Also create test_dedup.py that imports it and asserts dedup([1, 2, 1, 3, 2]) == [1, 2, 3]. Do not run the tests.",
+      "verifier": {
+        "command": "python3 ./verifiers/verify_dedup.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "csv_total",
+      "cluster_id": "csv_total",
+      "prompt": "The file data.csv has a header row 'item,value' and one more column-free row per item. Compute the sum of all values in the value column and write just that number into a new file named total.txt.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "data.csv",
+            "content": "item,value\napple,30\nbanana,50\ncherry,70\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_csv_total.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "fizzbuzz",
+      "cluster_id": "fizzbuzz",
+      "prompt": "Create fizzbuzz.py that, when run with python3, prints the numbers 1 through 15, one per line, replacing multiples of 3 with 'fizz', multiples of 5 with 'buzz', and multiples of both with 'fizzbuzz'.",
+      "verifier": {
+        "command": "python3 ./verifiers/verify_fizzbuzz.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "config_update",
+      "cluster_id": "config_update",
+      "prompt": "The file config.json exists. Create a new file config_new.json with the same content except retries must be changed to 5. Keep every other field exactly as it is, including port as a number.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "config.json",
+            "content": "{\n  \"host\": \"api.example.com\",\n  \"port\": 8080,\n  \"retries\": 3\n}\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_config_update.py",
+        "timeout_s": 30
+      }
     }
   ]
 }

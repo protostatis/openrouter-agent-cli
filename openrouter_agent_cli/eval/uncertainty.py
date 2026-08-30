@@ -93,6 +93,7 @@ def paired_bootstrap(
             "mean_diff": round(mean, 4),
             "ci": [round(lo, 4), round(hi, 4)],
             "p_a_gt_b": round(p_gt, 4),
+            "tied": bool(lo == 0.0 and hi == 0.0),
         }
     return {"n_tasks": len(table), "pairs": pairs, "insufficient": False}
 
@@ -130,6 +131,12 @@ def render_uncertainty(records: list[dict[str, Any]]) -> list[str]:
     for key in sorted(boot["pairs"]):
         entry = boot["pairs"][key]
         a, b = key.split("|")
+        if entry.get("tied"):
+            lines.append(
+                f"  {a} vs {b}: identical outcomes on every paired task (tied — "
+                f"add harder or more varied tasks to separate them)"
+            )
+            continue
         significant = entry["ci"][0] > 0 or entry["ci"][1] < 0
         if significant:
             winner = a if entry["mean_diff"] > 0 else b
