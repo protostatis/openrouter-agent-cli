@@ -99,9 +99,11 @@ def update_verdict(
     if not hits:
         raise KeyError(f"unknown run_id: {run_id}")
     rec = hits[-1]
-    if rec.get("verdict") not in (None, verdict):
+    if rec.get("verdict") is not None:
+        # Immutable once set: any second call is rejected outright (even with
+        # the same verdict) so evidence can never be rewritten after the fact.
         raise ValueError(
-            f"run {run_id} already has verdict {rec['verdict']!r}; refusing to change to {verdict!r}"
+            f"run {run_id} already has verdict {rec['verdict']!r}; refusing rewrite"
         )
     rec["verdict"] = verdict
     rec["verdict_evidence"] = evidence

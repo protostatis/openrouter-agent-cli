@@ -49,6 +49,8 @@ class Profile:
         return self.mock_script is not None
 
 
+_HOST_EXEC_ACK_ENV = "AGENT_EVAL_ALLOW_HOST_EXECUTION"
+
 class SuiteRunner:
     def __init__(
         self,
@@ -62,6 +64,13 @@ class SuiteRunner:
     ):
         if not profiles:
             raise ValueError("at least one profile is required")
+        uses_real = any(not p.uses_mock for p in profiles)
+        if uses_real and os.environ.get(_HOST_EXEC_ACK_ENV) != "1":
+            raise ValueError(
+                "Real-model attempts execute bash with full host permissions in a "
+                "disposable workspace — this is NOT sandbox containment. Set "
+                f"{_HOST_EXEC_ACK_ENV}=1 to accept, or use mock profiles."
+            )
         self.suite = suite
         self.profiles = profiles
         self.eval_dir = Path(eval_dir) if eval_dir else Path.cwd() / ".agent-eval"

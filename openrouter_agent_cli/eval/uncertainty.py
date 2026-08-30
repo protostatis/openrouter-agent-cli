@@ -42,19 +42,23 @@ def wilson_interval(successes: int, n: int) -> tuple[float, float] | None:
     return max(0.0, center - half), min(1.0, center + half)
 
 
-def _paired_task_table(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
-    """task_id -> {profile: 0/1}; keeps only tasks verified for ALL profiles
-    (a paired comparison requires complete pairs — no silent dropping)."""
-    table: dict[str, dict[str, int]] = defaultdict(dict)
+def _paired_task_table(records: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    """task_id -> {profile: mean pass fraction}; keeps only tasks verified for
+    ALL profiles. Replicate attempts (same task+profile, e.g. multiple rounds)
+    are AGGREGATED (averaged), never overwritten."""
+    per_pair: dict[tuple[str, str], list[int]] = defaultdict(list)
     for r in records:
         verdict = r.get("verdict")
         if verdict not in ("pass", "task_fail"):
             continue
-        table[r["task_id"]][r["profile"]["name"]] = 1 if verdict == "pass" else 0
-    complete: dict[str, dict[str, int]] = {}
-    for task_id, outcomes in table.items():
-        profiles = set(outcomes)
-        if len(outcomes) == len({r["profile"]["name"] for r in records}):
+        per_pair[(r["task_id"], r["profile"]["name"])].append(1 if verdict == "pass" else 0)
+    profile_count = len({r["profile"]["name"] for r in records})
+    raw: dict[str, dict[str, float]] = defaultdict(dict)
+    for (task_id, profile), vals in per_pair.items():
+        raw[task_id][profile] = sum(vals) / len(vals)
+    complete: dict[str, dict[str, float]] = {}
+    for task_id, outcomes in raw.items():
+        if len(outcomes) == profile_count:
             complete[task_id] = outcomes
     return complete
 

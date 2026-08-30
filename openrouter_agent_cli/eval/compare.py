@@ -120,18 +120,18 @@ def leaderboard(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 comparison = "tied with leader on every paired task"
             else:
                 significant = entry["ci"][0] > 0 or entry["ci"][1] < 0
+                # entry["p_a_gt_b"] is P(first-in-key beats second-in-key).
+                if name == key.split("|")[0]:
+                    p_name_beats_leader = entry["p_a_gt_b"]
+                else:
+                    p_name_beats_leader = 1.0 - entry["p_a_gt_b"]
                 if significant:
-                    winner = (
-                        name
-                        if (entry["mean_diff"] > 0) == (name == key.split("|")[0])
-                        else leader
-                    )
+                    better = p_name_beats_leader > 0.5
                     comparison = (
-                        f"significantly behind leader (P({name} beats {leader})="
-                        f"{entry['p_a_gt_b']:.2f})"
-                        if winner == leader
-                        else f"significantly AHEAD of leader (P({name} beats {leader})="
-                        f"{entry['p_a_gt_b']:.2f}) — leader is stale"
+                        (f"significantly AHEAD of leader (bootstrap favors {name}; "
+                         f"leader is stale)" if better else
+                         f"significantly behind leader (bootstrap favors {leader})")
+                        + f" — P({name} beats {leader})={p_name_beats_leader:.2f}"
                     )
                 else:
                     comparison = (
