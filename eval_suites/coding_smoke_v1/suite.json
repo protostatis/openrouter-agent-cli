@@ -1,0 +1,687 @@
+{
+  "schema_version": "agent-eval-suite-v1",
+  "suite_id": "coding-smoke-v1",
+  "tasks": [
+    {
+      "id": "greet",
+      "cluster_id": "greet",
+      "prompt": "Create a file named greet.py in the current directory containing a function greet() that returns the exact string 'hello from greet'. Then create test_greet.py that imports it and asserts the return value. Do not run the tests.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "README.md",
+            "content": "# fixture workspace\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_greet.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "sumlib",
+      "cluster_id": "sumlib",
+      "prompt": "The file sumlib.py has a function add(a, b) that returns a - b. Fix it so add returns a + b, then create test_sumlib.py that asserts add(2, 3) == 5. Do not run the tests.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "sumlib.py",
+            "content": "def add(a, b):\n    return a - b\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_sumlib.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "clamp",
+      "cluster_id": "clamp",
+      "prompt": "Create clamp.py containing a function clamp(value, low, high) that returns value limited to the range [low, high]. Also create test_clamp.py that imports it and asserts clamp(5, 1, 3) == 3 and clamp(0, 1, 3) == 1. Do not run the tests.",
+      "verifier": {
+        "command": "python3 ./verifiers/verify_clamp.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "sum_upto_fix",
+      "cluster_id": "sum_upto_fix",
+      "prompt": "The file sumlib2.py contains sum_upto(n), which is supposed to return 1 + 2 + ... + n, but it currently returns the sum up to n-1. Fix the function, and create test_sum_upto.py that imports it and asserts sum_upto(3) == 6. Do not run the tests.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "sumlib2.py",
+            "content": "def sum_upto(n):\n    return sum(range(n))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_sum_upto.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "dedup",
+      "cluster_id": "dedup",
+      "prompt": "Create dedup.py containing a function dedup(items) that returns a new list with duplicate values removed, keeping each value's first occurrence and preserving order. Also create test_dedup.py that imports it and asserts dedup([1, 2, 1, 3, 2]) == [1, 2, 3]. Do not run the tests.",
+      "verifier": {
+        "command": "python3 ./verifiers/verify_dedup.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "csv_total",
+      "cluster_id": "csv_total",
+      "prompt": "The file data.csv has a header row 'item,value' and one more column-free row per item. Compute the sum of all values in the value column and write just that number into a new file named total.txt.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "data.csv",
+            "content": "item,value\napple,30\nbanana,50\ncherry,70\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_csv_total.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "fizzbuzz",
+      "cluster_id": "fizzbuzz",
+      "prompt": "Create fizzbuzz.py that, when run with python3, prints the numbers 1 through 15, one per line, replacing multiples of 3 with 'fizz', multiples of 5 with 'buzz', and multiples of both with 'fizzbuzz'.",
+      "verifier": {
+        "command": "python3 ./verifiers/verify_fizzbuzz.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "config_update",
+      "cluster_id": "config_update",
+      "prompt": "The file config.json exists. Create a new file config_new.json with the same content except retries must be changed to 5. Keep every other field exactly as it is, including port as a number.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "config.json",
+            "content": "{\n  \"host\": \"api.example.com\",\n  \"port\": 8080,\n  \"retries\": 3\n}\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_config_update.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_stale_refactor",
+      "cluster_id": "hard_stale_refactor",
+      "prompt": "pricing.py applies a discount where percent is out of 100 (apply_discount(100, 50) halves the price). Change apply_discount so percent is instead a fraction (apply_discount(100, 0.5) must return 50.0). Beware that comments in the file may be stale. Everything that builds on discounting must keep working correctly.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "pricing.py",
+            "content": "# NOTE: percent is a fraction (0.15 = 15%) -- documentation may be stale.\n\ndef apply_discount(price, percent):\n    return round(price * (1 - percent / 100), 2)\n\n\ndef apply_discount_all(prices, percent):\n    return [apply_discount(p, percent) for p in prices]\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_stale_refactor.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_shared_constant",
+      "cluster_id": "hard_shared_constant",
+      "prompt": "Change the retry policy everywhere so the system retries up to 5 times. config.py exposes the retry count and client.py reports it in fetch(). Update whatever is needed so the change is consistent across modules, and keep client.py reading the count from config rather than duplicating it. README.md is informational only.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "config.py",
+            "content": "MAX_RETRIES = 3\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "client.py",
+            "content": "import config\n\n\ndef fetch(attempt):\n    return f\"attempt {attempt} of {config.MAX_RETRIES}\"\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "README.md",
+            "content": "Retries: 3\n\nDemo service.\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_shared_constant.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_ledger",
+      "cluster_id": "hard_ledger",
+      "prompt": "ledger.jsonl starts with three lines giving each account's starting balance, followed by transactions in order. Rules: a 'withdraw' must be skipped entirely if it would take that account below zero (balance unchanged); 'deposit' always applies. Process transactions strictly in order and write the final balance of every account to final_balances.json as a single JSON object mapping account name to integer balance.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "ledger.jsonl",
+            "content": "{\"account\": \"a\", \"balance\": 100}\n{\"account\": \"b\", \"balance\": 50}\n{\"account\": \"c\", \"balance\": 0}\n{\"account\": \"a\", \"type\": \"withdraw\", \"amount\": 30}\n{\"account\": \"b\", \"type\": \"withdraw\", \"amount\": 80}\n{\"account\": \"c\", \"type\": \"deposit\", \"amount\": 40}\n{\"account\": \"a\", \"type\": \"withdraw\", \"amount\": 70}\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_ledger.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_fix_failing_test",
+      "cluster_id": "hard_fix_failing_test",
+      "prompt": "test_prices_app.py currently fails. Fix prices_app.py so the test passes. Do not modify test_prices_app.py in any way.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "prices_app.py",
+            "content": "def total(cart):\n    return sum(item[\"price\"] * item[\"qty\"] for item in cart)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "test_prices_app.py",
+            "content": "import unittest\nfrom prices_app import total\n\nclass TestTotal(unittest.TestCase):\n    def test_total_rounds_to_cents(self):\n        self.assertEqual(total([{\"price\": 19.99, \"qty\": 7}]), 139.93)\n\n    def test_total_empty_cart(self):\n        self.assertEqual(total([]), 0)\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_fix_failing_test.py",
+        "timeout_s": 60
+      }
+    },
+    {
+      "id": "hard_api_rename",
+      "cluster_id": "hard_api_rename",
+      "prompt": "Rename the save_note function in storage.py to write_note (update the definition), and update every caller to use the new name. Behavior must stay exactly the same. README.md may not list all callers \u2014 search the codebase for usages.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "storage.py",
+            "content": "import pathlib\n\n\ndef save_note(note_id, text):\n    path = pathlib.Path(\"notes\") / f\"{note_id}.txt\"\n    path.parent.mkdir(exist_ok=True)\n    path.write_text(text)\n    return str(path)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "app.py",
+            "content": "from storage import save_note\n\n\ndef add_note(note_id, text):\n    return save_note(note_id, text)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "archive.py",
+            "content": "from storage import save_note\n\n\ndef archive_old(note_id, text):\n    return save_note(f\"old-{note_id}\", text)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "README.md",
+            "content": "# Notes service\n\napp.py adds notes via storage.save_note.\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_api_rename.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_crashing_script",
+      "cluster_id": "hard_crashing_script",
+      "prompt": "Running `python3 report.py` crashes. Fix report.py so it runs successfully and prints the correct total. Do not modify sales.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "sales.json",
+            "content": "[\n {\n  \"item\": \"widget\",\n  \"amount\": 100.0\n },\n {\n  \"item\": \"gadget\",\n  \"amount\": 45.5\n },\n {\n  \"item\": \"doohickey\",\n  \"amount\": \"12.50\"\n },\n {\n  \"item\": \"gizmo\",\n  \"amount\": 87.5\n }\n]\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "report.py",
+            "content": "import json\n\nwith open(\"sales.json\") as fh:\n    sales = json.load(fh)\n\ntotal = sum(row[\"amount\"] for row in sales)\nprint(f\"TOTAL: {total:.2f}\")\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_crashing_script.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_docs_conflict",
+      "cluster_id": "hard_docs_conflict",
+      "prompt": "Change the name formatting in formatter.py so format_name('Ada', 'Lovelace') returns 'Ada Lovelace'. Note: docs.md still describes the OLD behavior and is out of date \u2014 after changing the code, update docs.md so it documents the new behavior.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "formatter.py",
+            "content": "def format_name(first, last):\n    return f\"{last}, {first}\"\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "docs.md",
+            "content": "# Formatter\n\nNames are formatted as 'Last, First'.\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_docs_conflict.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_normalize_csv",
+      "cluster_id": "hard_normalize_csv",
+      "prompt": "Transform messy.csv into clean.json: a JSON array of objects, one per data row, each with keys name, email, joined. Rules: trim leading/trailing spaces from every field; email must be lowercase; joined dates appear as either ISO (yyyy-mm-dd) or US (mm/dd/yyyy) \u2014 output every date as ISO yyyy-mm-dd.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "messy.csv",
+            "content": "name,email,joined\nAda Lovelace ,  A.LOVELACE@example.com,2026-01-05\n Grace Hopper,grace.hopper@Example.COM,05/02/2026\nAlan Turing ,ALAN.TURING@example.com ,03/03/2026\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_normalize_csv.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_crash_counts",
+      "cluster_id": "hard_crash_counts",
+      "prompt": "Running `python3 count_regions.py` crashes. Fix count_regions.py so it runs successfully and prints each region with its order count, sorted alphabetically. Do not modify orders.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "orders.json",
+            "content": "[\n {\n  \"region\": \"east\",\n  \"amount\": 10\n },\n {\n  \"region\": \"west\",\n  \"amount\": 20\n },\n {\n  \"region\": \"east\"\n },\n {\n  \"region\": \"west\",\n  \"amount\": 5\n }\n]\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "count_regions.py",
+            "content": "import json\n\nwith open(\"orders.json\") as fh:\n    orders = json.load(fh)\n\ncounts = {}\nfor order in orders:\n    counts[order[\"region\"]] += 1\n\nfor region in sorted(counts):\n    print(region, counts[region])\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_crash_counts.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_ledger_refunds",
+      "cluster_id": "hard_ledger_refunds",
+      "prompt": "ledger2.jsonl starts with lines giving each account's starting balance, followed by transactions in order. Rules: a 'withdraw' must be skipped entirely if it would take the account below zero (balance unchanged); a 'refund' always applies. Process transactions strictly in order and write every account's final balance to final_balances.json as a single JSON object mapping account name to integer.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "ledger2.jsonl",
+            "content": "{\"account\": \"x\", \"balance\": 80}\n{\"account\": \"y\", \"balance\": 60}\n{\"account\": \"x\", \"type\": \"withdraw\", \"amount\": 30}\n{\"account\": \"y\", \"type\": \"refund\", \"amount\": 20}\n{\"account\": \"y\", \"type\": \"withdraw\", \"amount\": 90}\n{\"account\": \"x\", \"type\": \"withdraw\", \"amount\": 50}\n{\"account\": \"x\", \"type\": \"refund\", \"amount\": 30}\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_ledger_refunds.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_zero_division",
+      "cluster_id": "hard_zero_division",
+      "prompt": "Running `python3 averages.py` crashes. Fix averages.py so it runs and prints one line per region that HAS orders (sorted alphabetically): the region name, a space, then its average amount. Regions with no orders are simply skipped. Do not modify orders2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "orders2.json",
+            "content": "{\n \"east\": [\n  10,\n  20\n ],\n \"west\": [],\n \"south\": [\n  5\n ]\n}\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "averages.py",
+            "content": "import json\n\nwith open(\"orders2.json\") as fh:\n    orders = json.load(fh)\n\nfor region in sorted(orders):\n    amounts = orders[region]\n    print(region, sum(amounts) / len(amounts))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_zero_division.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "hard_silent_offbyone",
+      "cluster_id": "hard_silent_offbyone",
+      "prompt": "Running `python3 eligible.py` does not crash, but its output is wrong. The eligibility rule is: age 18 through 65, inclusive on both ends. Fix eligible.py so the printed count is correct. Do not modify attendees.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "attendees.json",
+            "content": "[\n {\n  \"name\": \"ana\",\n  \"age\": 17\n },\n {\n  \"name\": \"bob\",\n  \"age\": 18\n },\n {\n  \"name\": \"cy\",\n  \"age\": 30\n },\n {\n  \"name\": \"dee\",\n  \"age\": 64\n },\n {\n  \"name\": \"eli\",\n  \"age\": 65\n },\n {\n  \"name\": \"fay\",\n  \"age\": 66\n }\n]\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "eligible.py",
+            "content": "import json\n\nwith open(\"attendees.json\") as fh:\n    attendees = json.load(fh)\n\neligible = [a for a in attendees if 18 < a[\"age\"] < 65]\nprint(\"ELIGIBLE:\", len(eligible))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_hard_silent_offbyone.py",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix01_indexerror",
+      "cluster_id": "xfix01_indexerror",
+      "prompt": "Running `python3 chain.py` crashes. Fix chain.py so it runs successfully with the correct output. Do not modify pairs.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "pairs.json",
+            "content": "{\"pairs_count\": 3}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "chain.py",
+            "content": "import json\nrows = json.load(open(\"pairs.json\"))\nrows = rows[\"pairs_count\"]\nfor i in range(rows):\n    print(i, \"->\", i + 1)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix01_indexerror.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix02_valueerror",
+      "cluster_id": "xfix02_valueerror",
+      "prompt": "Running `python3 stock.py` crashes. Fix stock.py so it runs successfully with the correct output. Do not modify quantities.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "quantities.json",
+            "content": "[{\"item\": \"bolt\", \"qty\": \"4\"}, {\"item\": \"nut\", \"qty\": \"2.5\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "stock.py",
+            "content": "import json\nrows = json.load(open(\"quantities.json\"))\ntotal = 0\nfor row in rows:\n    total += int(row[\"qty\"])\nprint(\"TOTAL:\", total)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix02_valueerror.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix03_typeerror_none",
+      "cluster_id": "xfix03_typeerror_none",
+      "prompt": "Running `python3 sumread.py` crashes. Fix sumread.py so it runs successfully with the correct output. Do not modify readings.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "readings.json",
+            "content": "[{\"sensor\": \"a\", \"value\": 5}, {\"sensor\": \"b\", \"value\": null}, {\"sensor\": \"a\", \"value\": 7}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "sumread.py",
+            "content": "import json\nrows = json.load(open(\"readings.json\"))\nprint(\"SUM:\", sum(r[\"value\"] for r in rows))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix03_typeerror_none.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix04_keyerror_field",
+      "cluster_id": "xfix04_keyerror_field",
+      "prompt": "Running `python3 pricing.py` crashes. Fix pricing.py so it runs successfully with the correct output. Do not modify parts.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "parts.json",
+            "content": "[{\"name\": \"gear\", \"cost\": 3}, {\"name\": \"bolt\", \"cost\": 1}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "pricing.py",
+            "content": "import json\nrows = json.load(open(\"parts.json\"))\nfor row in rows:\n    print(row[\"name\"], row[\"price\"])\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix04_keyerror_field.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix05_zerodiv_empty",
+      "cluster_id": "xfix05_zerodiv_empty",
+      "prompt": "Running `python3 avgshare.py` crashes. Fix avgshare.py so it runs successfully with the correct output. Do not modify share.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "share.json",
+            "content": "{\"east\": [10, 20], \"west\": [], \"south\": [5]}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "avgshare.py",
+            "content": "import json\nd = json.load(open(\"share.json\"))\nfor k in sorted(d):\n    print(k, sum(d[k]) / len(d[k]))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix05_zerodiv_empty.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix06_typeerror_concat",
+      "cluster_id": "xfix06_typeerror_concat",
+      "prompt": "Running `python3 checkout.py` crashes. Fix checkout.py so it runs successfully with the correct output. Do not modify cart.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "cart.json",
+            "content": "[{\"item\": \"pen\", \"price\": 2}, {\"item\": \"ink\", \"price\": 5}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "checkout.py",
+            "content": "import json\nrows = json.load(open(\"cart.json\"))\ntotal = 0\nfor row in rows:\n    total += row[\"price\"]\nprint(\"Total: \" + total)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix06_typeerror_concat.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix07_silent_range",
+      "cluster_id": "xfix07_silent_range",
+      "prompt": "Running `python3 cubes.py` does not crash but prints the wrong result per its spec. Fix cubes.py. Do not modify bounds.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "bounds.json",
+            "content": "{\"n\": 5}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "cubes.py",
+            "content": "import json\nn = json.load(open(\"bounds.json\"))[\"n\"]\nprint(sum(i ** 3 for i in range(1, n)))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix07_silent_range.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix08_silent_truncation",
+      "cluster_id": "xfix08_silent_truncation",
+      "prompt": "Running `python3 avgstar.py` does not crash but prints the wrong result per its spec. Fix avgstar.py. Do not modify ratings.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "ratings.json",
+            "content": "[3, 4, 4]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "avgstar.py",
+            "content": "import json\nr = json.load(open(\"ratings.json\"))\nprint(\"AVG STARS:\", int(sum(r) / len(r)))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix08_silent_truncation.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix09_silent_whitespace",
+      "cluster_id": "xfix09_silent_whitespace",
+      "prompt": "Running `python3 uniq.py` does not crash but prints the wrong result per its spec. Fix uniq.py. Do not modify signups.txt.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "signups.txt",
+            "content": "a@x.com \na@x.com\nb@x.com\nc@x.com\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "uniq.py",
+            "content": "lines = open(\"signups.txt\").read().splitlines()\nprint(\"UNIQUE:\", len(set(lines)))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix09_silent_whitespace.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix10_silent_strsort",
+      "cluster_id": "xfix10_silent_strsort",
+      "prompt": "Running `python3 top.py` does not crash but prints the wrong result per its spec. Fix top.py. Do not modify scores.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "scores.json",
+            "content": "{\"alice\": 9, \"bob\": 10, \"carol\": 7}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "top.py",
+            "content": "import json\nd = json.load(open(\"scores.json\"))\nbest = max(d, key=lambda k: str(d[k]))\nprint(\"TOP:\", best)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix10_silent_strsort.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix11_typeerror_items",
+      "cluster_id": "xfix11_typeerror_items",
+      "prompt": "Running `python3 pairs.py` crashes. Fix pairs.py so it runs successfully with the correct output. Do not modify routes.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "routes.json",
+            "content": "[[\"a\", 1], [\"b\", 2]]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "pairs.py",
+            "content": "import json\nr = json.load(open(\"routes.json\"))\nfor k, v in r.items():\n    print(k, v)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix11_typeerror_items.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "xfix12_silent_case",
+      "cluster_id": "xfix12_silent_case",
+      "prompt": "Running `python3 domains.py` does not crash but prints the wrong result per its spec. Fix domains.py. Do not modify emails.txt.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "emails.txt",
+            "content": "Ann@x.com\nann@x.com\nBob@x.com\ncal@x.com\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "domains.py",
+            "content": "lines = open(\"emails.txt\").read().splitlines()\nprint(\"UNIQUE:\", len(set(lines)))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/xfix12_silent_case.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "adherence_fix_failing_test_allowed",
+      "cluster_id": "adherence_fix_failing_test_allowed",
+      "prompt": "test_prices_app.py currently fails. You may modify prices_app.py, test_prices_app.py, or both \u2014 whatever makes the test suite pass. The tests must still cover the same behaviors.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "prices_app.py",
+            "content": "def total(cart):\n    return sum(item[\"price\"] * item[\"qty\"] for item in cart)\n"
+          }
+        },
+        {
+          "write_file": {
+            "path": "test_prices_app.py",
+            "content": "import unittest\nfrom prices_app import total\n\nclass TestTotal(unittest.TestCase):\n    def test_total_rounds_to_cents(self):\n        self.assertEqual(total([{\"price\": 19.99, \"qty\": 7}]), 139.93)\n\n    def test_total_empty_cart(self):\n        self.assertEqual(total([]), 0)\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_adherence_control.py",
+        "timeout_s": 60
+      }
+    }
+  ]
+}

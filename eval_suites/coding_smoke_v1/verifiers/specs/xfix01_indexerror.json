@@ -1,0 +1,6 @@
+{
+ "script_name": "chain.py",
+ "data_name": "pairs.json",
+ "data_sha256": "16c6869255f967921991222b6ab9973480508383750f637121bd3a8ee4bb9f68",
+ "expected_stdout": "0 -> 1\n1 -> 2\n2 -> 0"
+}

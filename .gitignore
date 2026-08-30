@@ -7,3 +7,4 @@ build/
 *.egg-info/
 .env
 ab_tests/results/
+.agent-eval/

@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""A/B test harness for comparing system prompts against OpenRouter models."""
+# DEPRECATED (2026-08-30): this script owns a private copy of the agent loop,
+# so its results drift from real product behavior. Use scripts/run_suite.py:
+# it drives the real engine headlessly, grades with verifiable suites (not
+# text heuristics), applies paired counterbalancing, and reports uncertainty.
+# Kept temporarily for reference only; do not extend it.
+
+# Original docstring: "A/B test harness for comparing system prompts
+#                      against OpenRouter models."
+
 
 from __future__ import annotations
 

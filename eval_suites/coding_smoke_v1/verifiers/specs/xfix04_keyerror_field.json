@@ -1,0 +1,6 @@
+{
+ "script_name": "pricing.py",
+ "data_name": "parts.json",
+ "data_sha256": "1ea34973553b1d042efc167e88d5a3dbfa9f0b7fa69252f019a2478ba6c97962",
+ "expected_stdout": "gear 3\nbolt 1"
+}

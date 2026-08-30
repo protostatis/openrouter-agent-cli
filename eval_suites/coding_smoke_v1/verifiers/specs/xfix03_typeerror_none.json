@@ -1,0 +1,6 @@
+{
+ "script_name": "sumread.py",
+ "data_name": "readings.json",
+ "data_sha256": "7306caf2c586aa4c408f8da1a825d646b04843d1ef6a17bc236c4a0dc4d883ca",
+ "expected_stdout": "SUM: 12"
+}

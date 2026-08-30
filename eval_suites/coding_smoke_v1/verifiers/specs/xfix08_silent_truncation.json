@@ -1,0 +1,6 @@
+{
+ "script_name": "avgstar.py",
+ "data_name": "ratings.json",
+ "data_sha256": "e3de10739514897f93c9bd49fad6829b344dac9cca9c5f93f0f91cb02370be5a",
+ "expected_stdout": "AVG STARS: 4"
+}

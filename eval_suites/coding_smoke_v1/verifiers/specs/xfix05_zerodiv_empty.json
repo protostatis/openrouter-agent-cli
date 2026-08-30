@@ -1,0 +1,6 @@
+{
+ "script_name": "avgshare.py",
+ "data_name": "share.json",
+ "data_sha256": "77fbc31c3486b15702dca3a69468dc7082cdc286982c21e55399ec5b47b94e33",
+ "expected_stdout": "east 15.0\nsouth 5.0"
+}

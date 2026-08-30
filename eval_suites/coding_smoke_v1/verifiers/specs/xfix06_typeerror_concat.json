@@ -1,0 +1,6 @@
+{
+ "script_name": "checkout.py",
+ "data_name": "cart.json",
+ "data_sha256": "9e1787d075adf265370cd63f8b4d837b75cac88d712f058e49ab9a8f45d57bd8",
+ "expected_stdout": "Total: 7"
+}
