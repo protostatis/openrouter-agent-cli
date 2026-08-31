@@ -487,6 +487,11 @@ class OpenRouterAgentCLI:
         self.max_discover = max(1, min(10, max_discover))
         self.max_rounds = max(1, min(5, max_rounds))
         self.non_interactive_mode = False
+        # Optional bash-runner hook (evaluation sandbox seam). When set, it
+        # replaces run_bash inside _run_bash and must return the same
+        # structured JSON string contract. Production (interactive) use
+        # leaves it None so the host-shell path is untouched.
+        self.bash_runner: Any | None = None
         # Optional model-transport hook (evaluation/testing seam). When set, it
         # replaces the network call inside _call_openrouter and receives the
         # exact request kwargs the real API would get; it must return a
@@ -2236,6 +2241,8 @@ class OpenRouterAgentCLI:
             return _tool_result_json({"ok": False, "error": f"edit_file error: {e}"})
 
     async def _run_bash(self, command: str, timeout_seconds: int) -> str:
+        if self.bash_runner is not None:
+            return await self.bash_runner(command, timeout_seconds)
         return await run_bash(command, self.workdir, timeout_seconds, structured=True)
 
     def _get_discovery_session(self) -> DiscoverySession | None:

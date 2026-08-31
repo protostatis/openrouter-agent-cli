@@ -50,6 +50,11 @@ class Profile:
 
 
 _HOST_EXEC_ACK_ENV = "AGENT_EVAL_ALLOW_HOST_EXECUTION"
+_SANDBOX_ENV = "AGENT_EVAL_SANDBOX"  # "1"=require, "0"=never, unset=auto (linux+bwrap)
+
+def _sandbox_mode() -> str:
+    value = os.environ.get(_SANDBOX_ENV, "").strip().lower()
+    return value if value in ("1", "0") else "auto"
 
 class SuiteRunner:
     def __init__(
@@ -64,13 +69,6 @@ class SuiteRunner:
     ):
         if not profiles:
             raise ValueError("at least one profile is required")
-        uses_real = any(not p.uses_mock for p in profiles)
-        if uses_real and os.environ.get(_HOST_EXEC_ACK_ENV) != "1":
-            raise ValueError(
-                "Real-model attempts execute bash with full host permissions in a "
-                "disposable workspace — this is NOT sandbox containment. Set "
-                f"{_HOST_EXEC_ACK_ENV}=1 to accept, or use mock profiles."
-            )
         self.suite = suite
         self.profiles = profiles
         self.eval_dir = Path(eval_dir) if eval_dir else Path.cwd() / ".agent-eval"
@@ -78,6 +76,36 @@ class SuiteRunner:
         self.max_turns = max_turns
         self.command_timeout = command_timeout
         self.workspace_root = workspace_root
+        # Execution-containment gate (runs after field init).
+        self._sandboxed = False
+        uses_real = any(not p.uses_mock for p in profiles)
+        if not uses_real:
+            return
+        from .sandbox import sandbox_available
+
+        mode = _sandbox_mode()
+        available = sandbox_available()
+        if mode == "1":
+            # Explicit requirement: containment is mandatory; fail if absent.
+            if not available:
+                raise ValueError(
+                    "AGENT_EVAL_SANDBOX=1 requested but the Bubblewrap sandbox is "
+                    "unavailable (Linux + bwrap + systemd-user required)."
+                )
+            self._sandboxed = True
+            return
+        if mode == "auto" and available:
+            self._sandboxed = True
+            return  # contained: no host-execution acknowledgement required
+        if os.environ.get(_HOST_EXEC_ACK_ENV) == "1":
+            return  # explicit operator acknowledgement of host-level execution
+        raise ValueError(
+            "Real-model attempts execute bash with host permissions in a "
+            "disposable workspace and no sandbox is available (Linux + bwrap + "
+            "systemd-user required). Set AGENT_EVAL_ALLOW_HOST_EXECUTION=1 to "
+            "accept host-level execution, or AGENT_EVAL_SANDBOX=1 to require "
+            "containment (fails if unavailable)."
+        )
 
     # -- schedule -----------------------------------------------------------
 
@@ -137,6 +165,11 @@ class SuiteRunner:
             engine.policy = ToolPermissionPolicy(allow={"*"})
             engine.non_interactive_mode = True
             engine.one_shot_prompt = task.prompt
+            if getattr(self, "_sandboxed", False) and not profile.uses_mock:
+                from .sandbox import BubblewrapBashRunner
+
+                engine.bash_runner = BubblewrapBashRunner(str(workspace))
+                record["engine"]["sandbox"] = "bubblewrap"
             if profile.uses_mock:
                 script = profile.mock_script
                 if isinstance(script, (str, Path)):
