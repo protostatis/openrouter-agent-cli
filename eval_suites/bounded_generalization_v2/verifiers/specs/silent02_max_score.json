@@ -1,0 +1,6 @@
+{
+  "script_name": "scores2.py",
+  "data_name": "scores2.json",
+  "data_sha256": "bee5cba929e0a752aa997d7d55968083e29f0110796c3cc5d6a8ba0065d52db6",
+  "expected_stdout": "WINNER: blue"
+}

@@ -1,0 +1,224 @@
+{
+  "schema_version": "agent-eval-suite-v1",
+  "suite_id": "bounded-generalization-v2",
+  "tasks": [
+    {
+      "id": "repair01_missing_name",
+      "cluster_id": "repair01_missing_name",
+      "prompt": "Running `python3 members2.py` crashes. Fix members2.py so it runs successfully and prints one line per member: the uppercase name, or the literal string UNKNOWN when the name is missing, followed by a space and the team. Do not modify members2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "members2.json",
+            "content": "[{\"name\": \"lin\", \"team\": \"qa\"}, {\"name\": null, \"team\": \"ops\"}, {\"name\": \"zoe\", \"team\": \"qa\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "members2.py",
+            "content": "import json\nfor row in json.load(open(\"members2.json\")):\n    print(row[\"name\"].upper(), row[\"team\"])\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/repair01_missing_name.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "repair02_missing_tier",
+      "cluster_id": "repair02_missing_tier",
+      "prompt": "Running `python3 plans.py` crashes. Fix plans.py so it prints one line per customer as `name:tier`. When tier is missing, use the literal value unknown. Do not modify customers2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "customers2.json",
+            "content": "[{\"name\": \"mira\", \"tier\": \"pro\"}, {\"name\": \"noah\"}, {\"name\": \"ravi\", \"tier\": \"free\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "plans.py",
+            "content": "import json\nfor row in json.load(open(\"customers2.json\")):\n    print(f\"{row['name']}:{row['tier']}\")\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/repair02_missing_tier.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "repair03_running_total_scope",
+      "cluster_id": "repair03_running_total_scope",
+      "prompt": "Running `python3 running_total.py` crashes. Fix running_total.py so it processes items in order, adds only quantities greater than zero to a running total, and prints `name total` after each item. Do not modify batch.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "batch.json",
+            "content": "{\"items\": [{\"name\": \"a\", \"qty\": 2}, {\"name\": \"b\", \"qty\": -1}, {\"name\": \"c\", \"qty\": 4}]}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "running_total.py",
+            "content": "import json\ntotal = 0\ndef add(name, qty):\n    if qty > 0:\n        total += qty\n    return name, total\nfor item in json.load(open(\"batch.json\"))[\"items\"]:\n    name, total = add(item[\"name\"], item[\"qty\"])\n    print(name, total)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/repair03_running_total_scope.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "repair04_recursion_base",
+      "cluster_id": "repair04_recursion_base",
+      "prompt": "Running `python3 levels.py` crashes. Fix levels.py so total_down(x) returns x + (x-1) + ... + 1, and returns 0 when x is zero or negative. Do not modify levels.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "levels.json",
+            "content": "{\"start\": 3}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "levels.py",
+            "content": "import json\nn = json.load(open(\"levels.json\"))[\"start\"]\ndef total_down(x):\n    return x + total_down(x - 1)\nprint(\"TOTAL:\", total_down(n))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/repair04_recursion_base.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "silent01_inclusive_age",
+      "cluster_id": "silent01_inclusive_age",
+      "prompt": "Running `python3 ages2.py` does not crash but prints the wrong result. The eligibility rule is age 18 through 65 inclusive. Fix ages2.py so it prints the correct count. Do not modify ages2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "ages2.json",
+            "content": "[{\"name\": \"a\", \"age\": 17}, {\"name\": \"b\", \"age\": 18}, {\"name\": \"c\", \"age\": 30}, {\"name\": \"d\", \"age\": 65}, {\"name\": \"e\", \"age\": 66}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "ages2.py",
+            "content": "import json\nrows = json.load(open(\"ages2.json\"))\nprint(\"ELIGIBLE:\", sum(18 < row[\"age\"] < 65 for row in rows))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/silent01_inclusive_age.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "silent02_max_score",
+      "cluster_id": "silent02_max_score",
+      "prompt": "Running `python3 scores2.py` does not crash but prints the wrong result. The required output is the name of the team with the highest score. Fix scores2.py. Do not modify scores2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "scores2.json",
+            "content": "{\"red\": 9, \"blue\": 14, \"green\": 11}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "scores2.py",
+            "content": "import json\nscores = json.load(open(\"scores2.json\"))\nprint(\"WINNER:\", min(scores, key=scores.get))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/silent02_max_score.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "silent03_count_records",
+      "cluster_id": "silent03_count_records",
+      "prompt": "Running `python3 purchases2.py` does not crash but prints the wrong result. The required output is the number of purchase records, not the sum of their quantities. Fix purchases2.py. Do not modify purchases2.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "purchases2.json",
+            "content": "[{\"item\": \"pen\", \"qty\": 2}, {\"item\": \"ink\", \"qty\": 4}, {\"item\": \"clip\", \"qty\": 1}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "purchases2.py",
+            "content": "import json\nrows = json.load(open(\"purchases2.json\"))\nprint(\"LINES:\", sum(row[\"qty\"] for row in rows))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/silent03_count_records.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "transform01_csv_dates",
+      "cluster_id": "transform01_csv_dates",
+      "prompt": "Transform people.csv into people_clean.json: one object per row with keys name, email, joined. Trim all fields, lowercase email, convert mm/dd/yyyy dates to yyyy-mm-dd, and preserve row order. Do not modify people.csv.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "people.csv",
+            "content": "name,email,joined\n Lina Park , LINA@EXAMPLE.COM,04/07/2026\n Omar Diaz,omar@example.com ,2026-08-09\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_json_transform.py ./verifiers/specs/transform01_csv_dates.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "transform02_filter_priority",
+      "cluster_id": "transform02_filter_priority",
+      "prompt": "Create high_tickets.json from tickets.json by keeping every object whose priority is exactly high. Preserve each retained object unchanged and preserve input order. Do not modify tickets.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "tickets.json",
+            "content": "[{\"id\": \"a\", \"priority\": \"high\", \"owner\": \"lin\"}, {\"id\": \"b\", \"priority\": \"low\", \"owner\": \"omar\"}, {\"id\": \"c\", \"priority\": \"high\", \"owner\": \"zoe\"}]"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_json_transform.py ./verifiers/specs/transform02_filter_priority.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "transform03_join_account_totals",
+      "cluster_id": "transform03_join_account_totals",
+      "prompt": "Create account_totals.json by joining accounts.json and payments.json. Output one object per account in accounts.json order with keys name and cents, where cents is the sum of that account's payments. Include accounts with no payments using cents 0. Do not modify either input file.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "accounts.json",
+            "content": "[{\"id\": 10, \"name\": \"Ira\"}, {\"id\": 11, \"name\": \"Jules\"}, {\"id\": 12, \"name\": \"Kato\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "payments.json",
+            "content": "[{\"account_id\": 10, \"cents\": 125}, {\"account_id\": 10, \"cents\": 75}, {\"account_id\": 12, \"cents\": 200}]"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_json_transform.py ./verifiers/specs/transform03_join_account_totals.json",
+        "timeout_s": 30
+      }
+    }
+  ]
+}

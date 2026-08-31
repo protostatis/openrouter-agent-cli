@@ -1,0 +1,6 @@
+{
+  "script_name": "running_total.py",
+  "data_name": "batch.json",
+  "data_sha256": "60cfe86a2d90aa05a2013ecd88b849a5bddaee7711ce49e6a9fbe568e937b800",
+  "expected_stdout": "a 2\nb 2\nc 6"
+}

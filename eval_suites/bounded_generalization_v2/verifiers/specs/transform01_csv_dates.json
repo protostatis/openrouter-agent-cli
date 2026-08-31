@@ -1,0 +1,10 @@
+{
+  "input_sha256": {
+    "people.csv": "eb08fa06c417e9898e327d820468bfae36fa8c392f905d9079e8b6f4d462fe52"
+  },
+  "output_name": "people_clean.json",
+  "expected": [
+    {"name": "Lina Park", "email": "lina@example.com", "joined": "2026-04-07"},
+    {"name": "Omar Diaz", "email": "omar@example.com", "joined": "2026-08-09"}
+  ]
+}

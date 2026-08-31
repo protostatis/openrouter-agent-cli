@@ -1,0 +1,6 @@
+{
+  "script_name": "plans.py",
+  "data_name": "customers2.json",
+  "data_sha256": "e2beb39a596406b9a3f7c99e5993914f6f780503cce9d312d0218642a1f8c9ef",
+  "expected_stdout": "mira:pro\nnoah:unknown\nravi:free"
+}

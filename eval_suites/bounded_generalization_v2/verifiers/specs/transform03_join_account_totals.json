@@ -1,0 +1,12 @@
+{
+  "input_sha256": {
+    "accounts.json": "23489634d0d79dc182782fb96a0a1fcff83adb3f30f03889cb162920d4f759e8",
+    "payments.json": "76fd90f337fbff361d47332c2b530abede4c1b0272da5dc4e12469d3976924de"
+  },
+  "output_name": "account_totals.json",
+  "expected": [
+    {"name": "Ira", "cents": 200},
+    {"name": "Jules", "cents": 0},
+    {"name": "Kato", "cents": 200}
+  ]
+}

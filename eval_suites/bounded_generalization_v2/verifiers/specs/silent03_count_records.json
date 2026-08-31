@@ -1,0 +1,6 @@
+{
+  "script_name": "purchases2.py",
+  "data_name": "purchases2.json",
+  "data_sha256": "c2c6db893ac529d90b0c0ddfd82d53aee8b0a78b0f8fc1786605244b011c573f",
+  "expected_stdout": "LINES: 3"
+}

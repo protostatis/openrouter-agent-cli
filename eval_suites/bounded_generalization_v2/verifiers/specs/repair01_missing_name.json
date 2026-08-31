@@ -1,0 +1,6 @@
+{
+  "script_name": "members2.py",
+  "data_name": "members2.json",
+  "data_sha256": "0c2fed57fd3105d0db024b7c611ff3fd8656b8de7c90284b3ebbbb3005ca49ef",
+  "expected_stdout": "LIN qa\nUNKNOWN ops\nZOE qa"
+}

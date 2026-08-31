@@ -1,0 +1,10 @@
+{
+  "input_sha256": {
+    "tickets.json": "c4b7a17569c67870589ab62c121684a3fa081aef912de8d67aee0d46a99d711e"
+  },
+  "output_name": "high_tickets.json",
+  "expected": [
+    {"id": "a", "priority": "high", "owner": "lin"},
+    {"id": "c", "priority": "high", "owner": "zoe"}
+  ]
+}

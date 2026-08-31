@@ -1,0 +1,6 @@
+{
+  "script_name": "ages2.py",
+  "data_name": "ages2.json",
+  "data_sha256": "89278f947b3faa9183c98b44fa15ab311ab7a0ff028e61c26c5d91b8a6b33cba",
+  "expected_stdout": "ELIGIBLE: 3"
+}
