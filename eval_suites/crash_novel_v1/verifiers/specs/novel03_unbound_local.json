@@ -1,0 +1,6 @@
+{
+ "script_name": "cart.py",
+ "data_name": "order.json",
+ "data_sha256": "e123c83d54bb615b31d3f2eca87c73eb3bf189010a5c2ea1f4917597bcb9c7e0",
+ "expected_stdout": "a 3\nb 3\nc 5"
+}

@@ -230,6 +230,7 @@ class SuiteRunner:
                 Path(record["workspace"]),
                 trusted_cwd=self.suite.path.parent,
                 timeout_s=task.verifier_timeout_s,
+                contained=self._sandboxed,
             )
             update_verdict(
                 self.runs_path, record["run_id"], verdict.verdict, verdict.evidence

@@ -1,0 +1,6 @@
+{
+ "script_name": "top_player.py",
+ "data_name": "teams.json",
+ "data_sha256": "adaa44cfb697037caaa69a8adc320064811a8be4039fa35ab3e381d2fad39f6d",
+ "expected_stdout": "TOP: beta"
+}

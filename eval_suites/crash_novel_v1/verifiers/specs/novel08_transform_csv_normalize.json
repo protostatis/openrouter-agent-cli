@@ -1,0 +1,10 @@
+{
+  "input_sha256": {
+    "messy.csv": "7c3bc0fdce2559790fc773f62f997b710e770fec84b15c49be9e4a1a22fc74ee"
+  },
+  "output_name": "clean.json",
+  "expected": [
+    {"name": "Ada Lovelace", "email": "ada@example.com", "joined": "2026-01-05"},
+    {"name": "Grace Hopper", "email": "grace@example.com", "joined": "2026-05-02"}
+  ]
+}

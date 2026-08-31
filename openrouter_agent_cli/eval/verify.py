@@ -29,21 +29,41 @@ class Verdict:
 
 
 def run_verifier(
-    command: str, workspace: Path, trusted_cwd: Path, timeout_s: int = 30
+    command: str,
+    workspace: Path,
+    trusted_cwd: Path,
+    timeout_s: int = 30,
+    *,
+    contained: bool = False,
 ) -> Verdict:
-    """Run one verifier. Never raises; all failures become verdicts."""
+    """Run one verifier. Never raises; all failures become verdicts.
+
+    Real sandboxed campaigns set ``contained=True`` so a verifier that runs
+    agent-produced code cannot escape the same Linux namespace boundary.
+    Explicit host-execution campaigns retain the existing host path.
+    """
     try:
-        argv = shlex.split(command)
-        if not argv:
-            return Verdict(VERDICT_INFRA_ERROR, "verifier command is empty")
-        proc = subprocess.run(
-            [*argv, str(workspace)],
-            shell=False,
-            cwd=str(trusted_cwd),
-            timeout=max(1, timeout_s),
-            capture_output=True,
-            text=True,
-        )
+        if contained:
+            from .sandbox import run_contained_verifier
+
+            proc = run_contained_verifier(
+                command,
+                str(workspace),
+                str(trusted_cwd),
+                timeout_s,
+            )
+        else:
+            argv = shlex.split(command)
+            if not argv:
+                return Verdict(VERDICT_INFRA_ERROR, "verifier command is empty")
+            proc = subprocess.run(
+                [*argv, str(workspace)],
+                shell=False,
+                cwd=str(trusted_cwd),
+                timeout=max(1, timeout_s),
+                capture_output=True,
+                text=True,
+            )
     except subprocess.TimeoutExpired:
         return Verdict(VERDICT_INFRA_ERROR, f"verifier timed out after {timeout_s}s")
     except OSError as exc:

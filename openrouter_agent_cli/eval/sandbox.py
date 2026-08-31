@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -124,6 +125,84 @@ def _build_bwrap_argv(command: str, workspace: str, timeout: int, limits: Sandbo
         f"--property=RuntimeMaxSec={timeout + 2}s",
         *bwrap,
     ]
+
+
+def _build_verifier_argv(
+    command: str,
+    workspace: str,
+    trusted_cwd: str,
+    timeout: int,
+    limits: SandboxLimits,
+) -> list[str]:
+    """Build a read-only verifier sandbox command.
+
+    The verifier is trusted code, but it may execute files the agent produced.
+    Keeping that subprocess in the same namespace boundary prevents a
+    malicious or accidental task output from turning verification into host
+    execution.  The suite directory is mounted read-only at ``/trusted`` and
+    the attempt workspace is mounted read-only at ``/workspace``.
+    """
+    verifier_argv = shlex.split(command)
+    if not verifier_argv:
+        raise ValueError("verifier command is empty")
+    bwrap = [
+        "bwrap",
+        "--unshare-all",
+        "--new-session",
+        "--die-with-parent",
+        "--clearenv",
+    ]
+    for path in _RUNTIME_PATHS:
+        if os.path.exists(path):
+            bwrap.extend(["--ro-bind", path, path])
+    bwrap.extend(
+        [
+            "--proc", "/proc",
+            "--dev", "/dev",
+            "--tmpfs", "/tmp",
+            "--ro-bind", os.path.abspath(trusted_cwd), "/trusted",
+            "--ro-bind", os.path.abspath(workspace), "/workspace",
+            "--chdir", "/trusted",
+            "--setenv", "HOME", "/tmp",
+            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+            "--setenv", "LANG", "C.UTF-8",
+            "--setenv", "PYTHONNOUSERSITE", "1",
+            *verifier_argv,
+            "/workspace",
+        ]
+    )
+    return [
+        "systemd-run", "--user", "--quiet", "--wait", "--collect", "--pipe",
+        "--setenv=HOME=/tmp",
+        "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
+        "--setenv=PYTHONNOUSERSITE=1",
+        f"--property=MemoryMax={limits.memory_max}",
+        f"--property=TasksMax={limits.tasks_max}",
+        f"--property=CPUQuota={limits.cpu_quota}",
+        f"--property=RuntimeMaxSec={timeout + 2}s",
+        *bwrap,
+    ]
+
+
+def run_contained_verifier(
+    command: str,
+    workspace: str,
+    trusted_cwd: str,
+    timeout_s: int,
+    limits: SandboxLimits | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a suite verifier with its workspace mounted read-only."""
+    active_limits = limits or SandboxLimits()
+    timeout = _clamp_timeout(timeout_s, active_limits)
+    argv = _build_verifier_argv(
+        command, workspace, trusted_cwd, timeout, active_limits
+    )
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 5,
+    )
 
 
 class BubblewrapBashRunner:

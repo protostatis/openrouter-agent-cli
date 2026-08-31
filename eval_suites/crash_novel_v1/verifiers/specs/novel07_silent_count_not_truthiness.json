@@ -1,0 +1,6 @@
+{
+  "script_name": "passed.py",
+  "data_name": "statuses.json",
+  "data_sha256": "c7175f02274786b79809edb8cbab973d7d6430bcfc3b9e67f9d5f817f10fd7be",
+  "expected_stdout": "PASSED: 2"
+}

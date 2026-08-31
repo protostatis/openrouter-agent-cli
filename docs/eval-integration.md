@@ -23,14 +23,16 @@ openrouter_agent_cli/
                  field is filled solely by a verifier and is immutable once set
     suite.py     suite manifests: tasks, per-attempt disposable workspaces,
                  setup steps; verifier commands live OUTSIDE agent workspaces
-    verify.py    host-side verifier execution: exit 0 = pass, 2 = task_fail,
-                 anything else = infrastructure_error (never blamed on the agent)
+    verify.py    verifier execution: exit 0 = pass, 2 = task_fail, anything else
+                  = infrastructure_error (never blamed on the agent); sandboxed
+                  real runs execute this process in a read-only Bubblewrap namespace
     transport.py scripted MockTransport — a mock "brain" whose tool calls are
                  executed for real by the engine (mock brain, real hands);
                  the full loop runs offline with zero tokens
     runner.py    paired counterbalanced schedule; builds the engine exactly as
-                 --prompt mode does; allow-all permissions are safe ONLY
-                 because every attempt runs in a fresh disposable workspace
+                  --prompt mode does; allow-all permissions are safe ONLY
+                  because every attempt runs in a fresh disposable workspace;
+                  real sandboxed runs also contain their verifier
     compare.py   descriptive paired report
     uncertainty.py  Wilson intervals per profile; task-level cluster bootstrap
                  for paired differences + P(A beats B)
@@ -56,6 +58,13 @@ is `None`. This is the only engine modification the evaluation layer requires.
 5. Uncertainty ships with every comparison: a difference is called only when
    the interval excludes zero; otherwise the report says to add tasks.
 6. Reports describe THIS suite only — never a general ranking.
+
+For a real run with `AGENT_EVAL_SANDBOX=1`, the agent's bash commands and the
+verifier subprocess both run under Bubblewrap. The verifier sees trusted suite
+files at `/trusted` and the attempt workspace read-only at `/workspace`. An
+explicit `AGENT_EVAL_ALLOW_HOST_EXECUTION=1` is still available for operators,
+but it is a visibly weaker path and is not valid for the bounded real-model
+confirmation protocol.
 
 ## Discipline prompt overlays
 

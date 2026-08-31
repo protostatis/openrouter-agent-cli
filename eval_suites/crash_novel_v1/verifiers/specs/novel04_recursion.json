@@ -1,0 +1,6 @@
+{
+ "script_name": "countdown.py",
+ "data_name": "cfg.json",
+ "data_sha256": "506353d42f4aaac34493bdfff026ea0c4463a3bc510fb7aa038df8cea7aabbd1",
+ "expected_stdout": "RESULT: 1"
+}

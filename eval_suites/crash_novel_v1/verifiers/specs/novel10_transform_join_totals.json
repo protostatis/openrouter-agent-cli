@@ -1,0 +1,11 @@
+{
+  "input_sha256": {
+    "users.json": "9422d6ffea7bd081d0738c7866f76a53ac8a123548887419354d06cfc9d69d6f",
+    "orders.json": "9eb1641a8ed996848afba5609fed10f9dc0bc4ab9f2cf22676b561e04fb499d5"
+  },
+  "output_name": "order_totals.json",
+  "expected": [
+    {"name": "Ada", "total": 20},
+    {"name": "Grace", "total": 5}
+  ]
+}

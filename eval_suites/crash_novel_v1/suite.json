@@ -1,0 +1,224 @@
+{
+  "schema_version": "agent-eval-suite-v1",
+ "suite_id": "bounded-generalization-v1",
+  "tasks": [
+    {
+      "id": "novel01_attrerror_none",
+      "cluster_id": "novel01_attrerror_none",
+      "prompt": "Running `python3 members.py` crashes. Fix members.py so it runs successfully with the correct output: for each member print the uppercase name, or the literal string UNKNOWN when the name is missing, followed by a space and the department. Do not modify members.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "members.json",
+            "content": "[{\"name\": \"ana\", \"dept\": \"eng\"}, {\"name\": null, \"dept\": \"hr\"}, {\"name\": \"cy\", \"dept\": \"eng\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "members.py",
+            "content": "import json\nrows = json.load(open(\"members.json\"))\nfor row in rows:\n    print(row[\"name\"].upper(), row[\"dept\"])\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel01_attrerror_none.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel02_typeerror_missing_arg",
+      "cluster_id": "novel02_typeerror_missing_arg",
+      "prompt": "Running `python3 invoices.py` crashes. Fix invoices.py so it runs successfully with the correct output: one line per customer as `name: plan`. Do not modify customers.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "customers.json",
+            "content": "[{\"name\": \"ada\", \"plan\": \"pro\"}, {\"name\": \"bob\", \"plan\": \"free\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "invoices.py",
+            "content": "import json\nrows = json.load(open(\"customers.json\"))\n\ndef line(customer, plan):\n    return f\"{customer}: {plan}\"\n\nfor row in rows:\n    print(line(row[\"name\"]))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel02_typeerror_missing_arg.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel03_unbound_local",
+      "cluster_id": "novel03_unbound_local",
+      "prompt": "Running `python3 cart.py` crashes. Fix cart.py so it runs successfully with the correct output: process items in order while maintaining a running total that only adds quantities greater than 0; print one line per item as `name total` (total after that item). Do not modify order.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "order.json",
+            "content": "{\"items\": [{\"name\": \"a\", \"qty\": 3}, {\"name\": \"b\", \"qty\": 0}, {\"name\": \"c\", \"qty\": 2}]}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "cart.py",
+            "content": "import json\ndata = json.load(open(\"order.json\"))\ntotal = 0\n\ndef add_item(name, qty):\n    if qty > 0:\n        total = total + qty\n    return name, total\n\nfor it in data[\"items\"]:\n    name, total = add_item(it[\"name\"], it[\"qty\"])\n    print(name, total)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel03_unbound_local.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel04_recursion",
+      "cluster_id": "novel04_recursion",
+      "prompt": "Running `python3 countdown.py` crashes. Fix countdown.py so it runs successfully with the correct output. countdown(x) must return the sum x + (x-1) + ... + 1 (and 0 when x <= 0). Do not modify cfg.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "cfg.json",
+            "content": "{\"start\": 1}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "countdown.py",
+            "content": "import json\nn = json.load(open(\"cfg.json\"))[\"start\"]\n\ndef countdown(x):\n    return x + countdown(x - 1)\n\nprint(\"RESULT:\", countdown(n))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel04_recursion.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel05_silent_min_not_max",
+      "cluster_id": "novel05_silent_min_not_max",
+      "prompt": "Running `python3 top_player.py` does not crash but prints the wrong result per its spec. The spec: print the name of the team with the highest score. Fix top_player.py so it prints the correct team. Do not modify teams.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "teams.json",
+            "content": "{\"alpha\": 88, \"beta\": 102, \"gamma\": 76}"
+          }
+        },
+        {
+          "write_file": {
+            "path": "top_player.py",
+            "content": "import json\nt = json.load(open(\"teams.json\"))\nbest = min(t, key=lambda k: t[k])\nprint(\"TOP:\", best)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel05_silent_min_not_max.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel06_silent_sum_not_count",
+      "cluster_id": "novel06_silent_sum_not_count",
+      "prompt": "Running `python3 item_count.py` does not crash but prints the wrong result per its spec. The spec: print the number of purchase lines in the file. Fix item_count.py so it prints the correct count. Do not modify purchases.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "purchases.json",
+            "content": "[{\"item\": \"pen\", \"qty\": 3}, {\"item\": \"ink\", \"qty\": 2}, {\"item\": \"pen\", \"qty\": 1}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "item_count.py",
+            "content": "import json\nrows = json.load(open(\"purchases.json\"))\ntotal_qty = sum(r[\"qty\"] for r in rows)\nprint(\"ITEMS:\", total_qty)\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel06_silent_sum_not_count.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel07_silent_count_not_truthiness",
+      "cluster_id": "novel07_silent_count_not_truthiness",
+      "prompt": "Running `python3 passed.py` does not crash but prints the wrong result per its spec. The spec: print the number of records whose status is exactly `passed`. Fix passed.py so it prints the correct count. Do not modify statuses.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "statuses.json",
+            "content": "[{\"id\": 1, \"status\": \"passed\"}, {\"id\": 2, \"status\": \"failed\"}, {\"id\": 3, \"status\": \"passed\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "passed.py",
+            "content": "import json\nrows = json.load(open(\"statuses.json\"))\nprint(\"PASSED:\", sum(1 for row in rows if row[\"status\"]))\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_crash_family.py ./verifiers/specs/novel07_silent_count_not_truthiness.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel08_transform_csv_normalize",
+      "cluster_id": "novel08_transform_csv_normalize",
+      "prompt": "Transform messy.csv into clean.json: a JSON array with one object per data row and keys name, email, joined. Trim every field, lowercase email, and convert US dates (mm/dd/yyyy) to ISO yyyy-mm-dd. Preserve row order. Do not modify messy.csv.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "messy.csv",
+            "content": "name,email,joined\n Ada Lovelace , Ada@Example.COM ,2026-01-05\n Grace Hopper,grace@Example.COM,05/02/2026\n"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_json_transform.py ./verifiers/specs/novel08_transform_csv_normalize.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel09_transform_filter_records",
+      "cluster_id": "novel09_transform_filter_records",
+      "prompt": "Create active_records.json from records.json by keeping every record whose state is exactly `active`. Preserve each retained object unchanged and preserve input order. Do not modify records.json.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "records.json",
+            "content": "[{\"id\": 1, \"state\": \"active\", \"score\": 8}, {\"id\": 2, \"state\": \"inactive\", \"score\": 10}, {\"id\": 3, \"state\": \"active\", \"score\": 6}]"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_json_transform.py ./verifiers/specs/novel09_transform_filter_records.json",
+        "timeout_s": 30
+      }
+    },
+    {
+      "id": "novel10_transform_join_totals",
+      "cluster_id": "novel10_transform_join_totals",
+      "prompt": "Create order_totals.json by joining users.json and orders.json. Output one object per user in users.json order, with keys name and total, where total is the sum of that user's order amounts. Include users with no orders using total 0. Do not modify either input file.",
+      "setup": [
+        {
+          "write_file": {
+            "path": "users.json",
+            "content": "[{\"id\": 1, \"name\": \"Ada\"}, {\"id\": 2, \"name\": \"Grace\"}]"
+          }
+        },
+        {
+          "write_file": {
+            "path": "orders.json",
+            "content": "[{\"user_id\": 1, \"amount\": 12}, {\"user_id\": 1, \"amount\": 8}, {\"user_id\": 2, \"amount\": 5}]"
+          }
+        }
+      ],
+      "verifier": {
+        "command": "python3 ./verifiers/verify_json_transform.py ./verifiers/specs/novel10_transform_join_totals.json",
+        "timeout_s": 30
+      }
+    }
+  ]
+}

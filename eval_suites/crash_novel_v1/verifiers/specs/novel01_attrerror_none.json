@@ -1,0 +1,6 @@
+{
+ "script_name": "members.py",
+ "data_name": "members.json",
+ "data_sha256": "dfa3cd8291d6594ce23b38f49c2755f83864c1e88a1ceec8e3e44ce025ee49c8",
+ "expected_stdout": "ANA eng\nUNKNOWN hr\nCY eng"
+}

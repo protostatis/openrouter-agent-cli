@@ -46,6 +46,21 @@ def test_sandbox_argv_layout():
     assert "--setenv HOME /tmp" in joined
 
 
+def test_verifier_argv_is_read_only_and_rebased(tmp_path):
+    argv = sandbox._build_verifier_argv(
+        "python3 ./verifiers/check.py",
+        str(tmp_path / "workspace"),
+        str(tmp_path / "suite"),
+        30,
+        sandbox.SandboxLimits(),
+    )
+    joined = " ".join(argv)
+    assert "--ro-bind " + str(tmp_path / "suite") + " /trusted" in joined
+    assert "--ro-bind " + str(tmp_path / "workspace") + " /workspace" in joined
+    assert "--chdir /trusted" in joined
+    assert "python3 ./verifiers/check.py /workspace" in joined
+
+
 def test_engine_bash_runner_delegation(tmp_path):
     """When bash_runner is set on the engine, _run_bash must call it and
     return its structured JSON string."""

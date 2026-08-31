@@ -45,11 +45,14 @@ Three-result probe, run host-side on the attempt workspace:
 
 ## Prerequisites (acknowledged)
 
-- **Containment is NOT yet in place.** The experiment therefore runs ONLY
-  under the existing fail-closed gate (`AGENT_EVAL_ALLOW_HOST_EXECUTION=1`
-  explicit acknowledgement) and on suites whose verifiers are pure file
-  inspection (no importing/running agent-produced code). Any verifier that
-  executes untrusted agent output is excluded until sandbox isolation exists.
+- **Linux containment is now in place and required.** The experiment runs on a
+  host with Bubblewrap plus a working systemd user session, with
+  `AGENT_EVAL_SANDBOX=1`. Agent bash commands and the verifier subprocess are
+  contained; the verifier receives the attempt workspace read-only. If that
+  stack is unavailable, the run fails closed rather than falling back to host
+  execution. The explicit `AGENT_EVAL_ALLOW_HOST_EXECUTION=1` path remains
+  available for operator-directed development checks, but is not valid evidence
+  for this experiment.
 - The prototype adds a **runtime checkpoint concept** — a clean event/control
   seam for "probe now / inject / stop" — NOT coupling evaluation policy to
   the engine's internal `_tool_records`. `model_transport` stays a

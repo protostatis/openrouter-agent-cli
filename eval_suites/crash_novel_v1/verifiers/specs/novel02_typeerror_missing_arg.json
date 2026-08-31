@@ -1,0 +1,6 @@
+{
+ "script_name": "invoices.py",
+ "data_name": "customers.json",
+ "data_sha256": "535eda360a06b8a02e57cbcfb96dd790019838fa1963d14c0ddf960389cce140",
+ "expected_stdout": "ada: pro\nbob: free"
+}

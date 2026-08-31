@@ -1,0 +1,10 @@
+{
+  "input_sha256": {
+    "records.json": "39d05385de219c718ca9e51aecd8f0bd27f4995fb90efda2c01d8adcdca80860"
+  },
+  "output_name": "active_records.json",
+  "expected": [
+    {"id": 1, "state": "active", "score": 8},
+    {"id": 3, "state": "active", "score": 6}
+  ]
+}

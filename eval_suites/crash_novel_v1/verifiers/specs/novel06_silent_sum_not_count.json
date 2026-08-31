@@ -1,0 +1,6 @@
+{
+ "script_name": "item_count.py",
+ "data_name": "purchases.json",
+ "data_sha256": "8c395a9d5f6a259464312140896152995313565b0c4c1721ce58648d5720570b",
+ "expected_stdout": "ITEMS: 3"
+}
