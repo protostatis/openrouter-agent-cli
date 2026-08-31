@@ -9,7 +9,8 @@ with:
   access),
 - the runtime paths bound read-only and the attempt workspace bound as
   ``/workspace`` (the only writable bind),
-- a fresh tmpfs ``/tmp``, cleared environment (HOME=/tmp, allowlisted PATH),
+- a fresh tmpfs ``/tmp``, cleared environment (HOME=/tmp, allowlisted PATH; non-login
+  shell so /etc/profile cannot override them),
 - memory / task / CPU / wall-clock limits enforced by systemd.
 
 Only engages on Linux with ``bwrap`` + systemd-user available; everywhere
@@ -109,7 +110,7 @@ def _build_bwrap_argv(command: str, workspace: str, timeout: int, limits: Sandbo
             "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
             "--setenv", "LANG", "C.UTF-8",
             "--setenv", "PYTHONNOUSERSITE", "1",
-            "/bin/bash", "--noprofile", "--norc", "-lc", command,
+            "/bin/bash", "--noprofile", "--norc", "-c", command,
         ]
     )
     return [
