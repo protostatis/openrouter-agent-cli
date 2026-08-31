@@ -1,8 +1,21 @@
 # Bounded Generalization Protocol
 
-**Status:** frozen before target-model collection on 2026-08-30.
+**Status:** **invalidated as a confirmatory protocol** on 2026-08-30. It was
+written as frozen before the collection, but the post-collection ledger audit
+found older target-model records for six of the ten task IDs. This document is
+retained as the v1 design record; the v1 collection is exploratory only and is
+superseded by the clean v2 protocol.
 **Suite:** `eval_suites/crash_novel_v1/suite.json`, whose manifest identifier is
 `bounded-generalization-v1`.
+
+## Validity ruling
+
+The six tasks `novel01` through `novel06` were already present in the ignored
+`.agent-eval/runs/crash-novel-v1.jsonl` ledger before this protocol was written.
+They therefore could not be treated as unseen confirmatory tasks. The four
+tasks `novel07` through `novel10` were new, but four tasks are not enough to
+support the planned 10-task analysis. No v1 result is used to support a model
+ranking or generalization claim.
 
 ## Question
 
@@ -15,8 +28,7 @@ quality, programming ability, or price tier.
 
 ## Task families
 
-The suite contains 10 tasks that were not run on any target model before this
-protocol was frozen:
+The planned suite contained 10 tasks in three families:
 
 | Family | Task IDs | What it tests |
 |---|---|---|

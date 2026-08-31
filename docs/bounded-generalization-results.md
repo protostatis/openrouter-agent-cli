@@ -1,17 +1,21 @@
-# Bounded Generalization Results
+# Exploratory Bounded-Generalization Results (v1)
 
 **Collection completed:** 2026-08-30 on `ubuntu-local`.
-**Protocol:** `docs/bounded-generalization-protocol.md`.
+**Status:** exploratory only; **invalid as confirmatory evidence**.
+**Protocol record:** `docs/bounded-generalization-protocol.md` (v1,
+invalidated).
 **Suite:** `bounded-generalization-v1`.
 
 ## Conclusion
 
-The earlier crash-diagnosis ordering did **not** receive confirmatory support
-from this broader suite. Nemotron passed 10 of 10 tasks and GPT-4o-mini passed
-8 of 10, but 8 tasks were passed by both models. The two-sided exact sign test
-therefore had only two non-tied tasks and returned **p = 0.5**, far above the
-predeclared 0.05 threshold. The correct conclusion is **inconclusive**, not
-that Nemotron is generally better.
+The 60 recorded attempts are useful for debugging the harness and showing that
+this task collection has a high success ceiling, but they provide **no
+confirmatory evidence**. Six of the ten task IDs had older target-model
+records before collection, so the planned unseen-task condition was violated.
+Nemotron passed 10 of 10 tasks and GPT-4o-mini passed 8 of 10, but 8 tasks were
+passed by both models. The two-sided exact sign test had only two non-tied tasks
+and returned **p = 0.5**. This is descriptive only; it is not a model-ranking
+result.
 
 The broader suite also showed a high ceiling: all three models passed nearly
 every task. That makes this collection useful as a generalization check, but
