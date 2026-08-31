@@ -114,6 +114,9 @@ def _build_bwrap_argv(command: str, workspace: str, timeout: int, limits: Sandbo
     )
     return [
         "systemd-run", "--user", "--quiet", "--wait", "--collect", "--pipe",
+        "--setenv=HOME=/tmp",
+        "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
+        "--setenv=PYTHONNOUSERSITE=1",
         f"--property=MemoryMax={limits.memory_max}",
         f"--property=TasksMax={limits.tasks_max}",
         f"--property=CPUQuota={limits.cpu_quota}",
