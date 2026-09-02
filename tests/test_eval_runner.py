@@ -249,3 +249,52 @@ def test_eval_module_rejects_missing_profile(tmp_path: Path, suite: Path) -> Non
     )
     assert proc.returncode != 0
     assert "at least one --profile is required" in proc.stderr
+
+
+def test_engine_failure_is_graded_infrastructure_not_task_fail(
+    tmp_path: Path, suite: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider/engine failure must never be graded as an ordinary model
+    task failure; the workspace verifier must not even run for it."""
+    from openrouter_agent_cli.eval.records import append_record, make_record, new_run_id
+    from openrouter_agent_cli.eval.verify import Verdict
+
+    loaded = load_suite(suite)
+    runner = SuiteRunner(
+        loaded,
+        [Profile(name="worker", prompt="P", mock_script=dict(_MOCK_DOES_WORK))],
+        eval_dir=tmp_path / "eval",
+    )
+    runner.runs_path.parent.mkdir(parents=True, exist_ok=True)
+    record = make_record(
+        run_id=new_run_id(), suite_id="s", task_id=loaded.tasks[0].id,
+        cluster_id=loaded.tasks[0].cluster_id, profile_name="p",
+        profile_prompt="P", model="m", transport="openrouter",
+        workdir=str(tmp_path), scheduled_index=0,
+    )
+    record["engine"] = {"error": "engine terminal_status=provider_error"}
+    append_record(runner.runs_path, record)
+
+    verifier_calls: list[str] = []
+
+    def _boom_verifier(*args, **kwargs) -> Verdict:
+        verifier_calls.append("called")
+        return Verdict("pass", "must not happen")
+
+    monkeypatch.setattr("openrouter_agent_cli.eval.runner.run_verifier", _boom_verifier)
+    runner.verify_all([record])
+
+    assert verifier_calls == []
+    assert record["verdict"] == "infrastructure_error"
+    assert "provider_error" in record["verdict_evidence"]
+
+
+def test_unknown_assisted_profile_is_rejected(tmp_path: Path, suite: Path) -> None:
+    from openrouter_agent_cli.eval.cli import _parse_profiles
+
+    with pytest.raises(SystemExit):
+        _parse_profiles(
+            ["worker=some/path.json"],
+            None,
+            assisted_profiles={"worker", "ghost"},
+        )

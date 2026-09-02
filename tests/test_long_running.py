@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import sys
+from pathlib import Path
 
+import httpx
 import pytest
 
 from openrouter_agent_cli.cache import CacheAwareContext
@@ -13,8 +16,10 @@ from openrouter_agent_cli.cli import (
     CheckpointDecision,
     OpenRouterAgentCLI,
     RuntimeCheckpoint,
+    ToolPermissionPolicy,
 )
 from openrouter_agent_cli.completion import UserCompletionPolicy
+from openrouter_agent_cli.eval.transport import MockTransport
 
 
 def _checkpoint() -> RuntimeCheckpoint:
@@ -99,3 +104,202 @@ def test_work_order_persists_across_resume(tmp_path, monkeypatch):
     assert resumed.work_order["objective"] == "Fix the login test"
     assert resumed.work_order["verify_command"] == "pytest -q"
     assert "Fix the login test" in resumed._work_order_message("continue")
+
+
+def _engine_with_task(
+    tmp_path,
+    monkeypatch,
+    *,
+    task: str,
+    verify_command: str,
+    responses: list[dict],
+    workdir=None,
+) -> OpenRouterAgentCLI:
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "sessions"))
+    engine = OpenRouterAgentCLI(
+        api_key="not-a-real-key",
+        model="mock-model",
+        session_id="product-test",
+        workdir=str(workdir or tmp_path),
+        max_turns=10,
+        max_history_messages=64,
+        command_timeout=30,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+        task=task,
+        verify_command=verify_command,
+    )
+    engine.non_interactive_mode = True
+    engine.policy = ToolPermissionPolicy(allow={"*"})
+    engine.model_transport = MockTransport({"responses": responses})
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_tool_using_repair_is_reverified(tmp_path, monkeypatch):
+    """A repair response that used mutating tools must re-run the acceptance
+    check at that boundary and stop with fresh evidence (not end silently)."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="Create marker.txt",
+        verify_command="test -f marker.txt",
+        responses=[
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "tmp.txt", "content": "x\n"}}
+            ]},
+            {"text": "I wrote tmp.txt, marker is next"},
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "marker.txt", "content": "ok\n"}}
+            ]},
+            {"text": "must not be requested"},
+        ],
+    )
+    async with httpx.AsyncClient() as client:
+        result = await engine._run_user_turn(client, "Do the work.")
+
+    assert result == ""
+    assert engine.work_order["status"] == "verified"
+    assert (Path(engine.workdir) / "marker.txt").is_file()
+    assert engine.completion_policy.last_result["status"] == "verified"
+    # The 4th scripted response must not be consumed.
+    assert len(engine.model_transport.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_read_only_repair_response_is_reverified(tmp_path, monkeypatch):
+    """A repair response using only read-only tools still re-runs the
+    acceptance check before the turn stops. A read-only repair cannot change
+    the workspace, so the second check honestly reports failed and the turn
+    ends with that evidence instead of silently."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="Create marker.txt",
+        verify_command="test -f marker.txt",
+        responses=[
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "tmp.txt", "content": "x\n"}}
+            ]},
+            {"text": "checking the workspace"},
+            {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"text": "must not be requested"},
+        ],
+    )
+    async with httpx.AsyncClient() as client:
+        result = await engine._run_user_turn(client, "Do the work.")
+
+    assert result == ""
+    # The second acceptance check ran at the read-only boundary (and failed,
+    # because a read-only repair could not create marker.txt).
+    assert engine.completion_policy.last_result["status"] == "failed"
+    assert engine.work_order["status"] == "failed"
+    assert len(engine.model_transport.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_resume_rebinds_the_resumed_sessions_contract(tmp_path, monkeypatch):
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    base = {
+        "api_key": "test-key",
+        "model": "test-model",
+        "max_turns": 2,
+        "max_history_messages": 60,
+        "command_timeout": 5,
+        "tools_enabled": True,
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "discovery_mode": "off",
+    }
+    session_a = OpenRouterAgentCLI(
+        **base,
+        session_id="session-a",
+        workdir=str(tmp_path),
+        task="Task A",
+        verify_command="test -f a.txt",
+    )
+    session_a._save_session()
+
+    session_b = OpenRouterAgentCLI(
+        **base,
+        session_id="session-b",
+        workdir=str(tmp_path),
+        task="Task B",
+        verify_command="test -f b.txt",
+    )
+    assert session_b.completion_policy.command == "test -f b.txt"
+
+    # Resuming A must bind A's command, not carry B's policy forward.
+    await session_b._handle_command(None, "/resume session-a")
+    assert session_b.work_order["objective"] == "Task A"
+    assert session_b.completion_policy.command == "test -f a.txt"
+
+    # Resuming a contractless session must clear the contract entirely.
+    session_c = OpenRouterAgentCLI(
+        **base, session_id="session-c", workdir=str(tmp_path)
+    )
+    session_c._save_session()
+    await session_b._handle_command(None, "/resume session-c")
+    assert session_b.work_order is None
+    assert session_b.completion_policy is None
+
+
+@pytest.mark.asyncio
+async def test_cwd_rescopes_the_acceptance_contract(tmp_path, monkeypatch):
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    other = tmp_path / "other-project"
+    other.mkdir()
+    cli = OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id="cwd-test",
+        workdir=str(tmp_path),
+        max_turns=2,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+        task="Task X",
+        verify_command="pytest -q",
+    )
+    assert cli.completion_policy.workdir == os.path.abspath(str(tmp_path))
+
+    await cli._handle_command(None, f"/cwd {other}")
+    assert cli.completion_policy.workdir == os.path.abspath(str(other))
+    assert cli.work_order["status"] == "not_verified"
+    assert cli.work_order["last_check"] is None
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_sets_terminal_status(tmp_path, monkeypatch):
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    cli = OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id="provider-test",
+        workdir=str(tmp_path),
+        max_turns=2,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+    )
+    cli.non_interactive_mode = True
+    cli.policy = ToolPermissionPolicy(allow={"*"})
+
+    class BoomTransport:
+        async def __call__(self, client, **kwargs):
+            raise RuntimeError("provider unreachable")
+
+    cli.model_transport = BoomTransport()
+    async with httpx.AsyncClient() as client:
+        await cli._run_user_turn(client, "hi")
+    assert cli.terminal_status == "provider_error"

@@ -574,6 +574,11 @@ class OpenRouterAgentCLI:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+        # Structured terminal outcome of the last user turn. "ok" means the
+        # engine reached a normal boundary; "provider_error" means a model
+        # request failed (HTTP or transport) and the turn ended without work.
+        # Evaluation grades infrastructure errors separately from task failure.
+        self.terminal_status: str = "ok"
         self._discovery_session: DiscoverySession | None = None
         self._discovery_poisoned = False
         self._debug = False
@@ -950,6 +955,20 @@ class OpenRouterAgentCLI:
         self.completion_policy = None
         self._save_session()
 
+    def _reset_session_scoped_state(self) -> None:
+        """Drop state that belongs to the previous conversation identity.
+
+        Used on session switch / new session / history clear so a resumed or
+        fresh session starts with its own contract and cache-prefix baseline
+        instead of inheriting the old one.
+        """
+        self.work_order = None
+        self.completion_policy = None
+        if isinstance(self.checkpoint_hook, UserCompletionPolicy):
+            self.checkpoint_hook = None
+        self._last_displayed_check = None
+        self.cache_context.reset_transient()
+
     def _display_check_result(self, result: dict[str, Any] | None) -> None:
         if not result:
             return
@@ -1307,10 +1326,7 @@ class OpenRouterAgentCLI:
             self._session_allow.clear()
             self._session_deny.clear()
             self._batch_deny.clear()
-            self.work_order = None
-            self.completion_policy = None
-            if isinstance(self.checkpoint_hook, UserCompletionPolicy):
-                self.checkpoint_hook = None
+            self._reset_session_scoped_state()
             self._resumed = False
             self._save_session()
             print("Session history cleared.")
@@ -1328,10 +1344,7 @@ class OpenRouterAgentCLI:
             self._session_allow.clear()
             self._session_deny.clear()
             self._batch_deny.clear()
-            self.work_order = None
-            self.completion_policy = None
-            if isinstance(self.checkpoint_hook, UserCompletionPolicy):
-                self.checkpoint_hook = None
+            self._reset_session_scoped_state()
             self._resumed = False
             self._save_session()
             print(
@@ -1487,10 +1500,16 @@ class OpenRouterAgentCLI:
             self.session_id = target
             self._tool_records.clear()
             self._last_compaction_backup = None
+            self._last_file_backup = None
             self._session_allow.clear()
             self._session_deny.clear()
+            self._reset_session_scoped_state()
             self._resumed = True
             self.messages = self._load_session()
+            # Rebind the resumed session's own acceptance contract (its command
+            # and current working directory) instead of carrying the previous
+            # session's policy forward.
+            self._install_completion_policy()
             print(f"Resumed session: {self.session_id}")
             return True
 
@@ -1534,6 +1553,17 @@ class OpenRouterAgentCLI:
             # project. Persistent rules are shown explicitly by /policy.
             self._session_allow.clear()
             self._session_deny.clear()
+            # Re-scope the acceptance contract to the new directory and reset
+            # its status; the old directory's check result no longer applies.
+            if self.completion_policy is not None or self.work_order is not None:
+                if self.work_order is not None:
+                    self.work_order["status"] = "not_verified"
+                    self.work_order["last_check"] = None
+                    self.work_order["updated_at"] = time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    )
+                self._install_completion_policy()
+                print("Acceptance check re-scoped to the new working directory (status reset to not_verified).")
             print(_strip_control_chars(f"Working directory set to: {self.workdir}"))
             print("Session-scoped permission grants cleared after cwd change.")
             return True
@@ -2931,17 +2961,24 @@ class OpenRouterAgentCLI:
         caller must perform the one permitted extra model response.
         """
         decision = await self._run_checkpoint(kind="final_answer", turn=turn)
-        if isinstance(self.checkpoint_hook, UserCompletionPolicy):
-            result = copy_result(self.completion_policy.last_result)
-            if result is not None and result != self._last_displayed_check:
-                self._display_check_result(result)
-                self._last_displayed_check = result
+        self._display_policy_check()
         action = self._apply_checkpoint_decision(decision)
         if action == "repair":
             return True, ""
         self._output_response(text)
         self._save_session()
         return False, text
+
+    def _display_policy_check(self) -> None:
+        """Show the latest user acceptance evidence once, when one exists."""
+        if not isinstance(self.checkpoint_hook, UserCompletionPolicy):
+            return
+        if self.completion_policy is None:
+            return
+        result = copy_result(self.completion_policy.last_result)
+        if result is not None and result != self._last_displayed_check:
+            self._display_check_result(result)
+            self._last_displayed_check = result
 
     async def _run_user_turn(self, client: httpx.AsyncClient, user_text: str) -> str:
         self._turn_allow.clear()
@@ -2951,6 +2988,7 @@ class OpenRouterAgentCLI:
         self._checkpoint_sequence = 0
         self._checkpoint_repair_count = 0
         self._checkpoint_repair_pending = False
+        self.terminal_status = "ok"
         if self.completion_policy is not None:
             self.completion_policy.begin_turn()
             self._last_displayed_check = None
@@ -2991,10 +3029,12 @@ class OpenRouterAgentCLI:
             except httpx.HTTPStatusError as e:
                 detail = _truncate(e.response.text, 300)
                 self._log(f"[openrouter] HTTP {e.response.status_code}: {detail}")
+                self.terminal_status = "provider_error"
                 self._save_session()
                 return ""
             except Exception as e:
                 self._log(f"[openrouter] Request failed: {e}")
+                self.terminal_status = "provider_error"
                 self._save_session()
                 return ""
 
@@ -3245,14 +3285,21 @@ class OpenRouterAgentCLI:
                         turn_limit += 1
                     turn += 1
                     continue
+                self._display_policy_check()
                 if action == "stop" or self._checkpoint_repair_pending:
                     self._save_session()
                     return ""
 
             # A repair request grants exactly one additional model response.
-            # This guard also covers a response containing only read-only tools,
-            # for which no mutating-batch checkpoint is emitted.
+            # If that response used only read-only tools (no mutating-batch
+            # checkpoint fires), run the acceptance check once more at this
+            # boundary so the turn stops with fresh evidence, not silently.
             if self._checkpoint_repair_pending:
+                decision = await self._run_checkpoint(
+                    kind="final_answer", turn=turn + 1
+                )
+                self._display_policy_check()
+                self._apply_checkpoint_decision(decision)
                 self._save_session()
                 return ""
 

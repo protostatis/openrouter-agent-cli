@@ -124,23 +124,34 @@ class UserCompletionPolicy:
         except Exception:
             return []
 
+    def _decide(self, result: dict[str, Any]) -> CheckpointDecision:
+        from .cli import CheckpointDecision
+
+        status = result["status"]
+        if status == "verified":
+            return CheckpointDecision(action="stop")
+        if status == "failed" and self.repair_injections == 0:
+            self.repair_injections += 1
+            return CheckpointDecision(action="repair", message=_REPAIR_MESSAGE)
+        # failed / not_verified after the single permitted repair: the engine
+        # shows the second check evidence and ends the turn without looping.
+        return CheckpointDecision()
+
     async def __call__(self, event: RuntimeCheckpoint) -> CheckpointDecision:
         from .cli import CheckpointDecision
 
-        # Mutating batches do not end a user turn. The check runs at the actual
-        # completion boundary, which avoids interrupting useful multi-step work.
-        if event.kind != "final_answer":
-            return CheckpointDecision()
-        result = await self.check()
-        status = result["status"]
-        if status == "verified":
-            action = "stop"
-        elif status == "failed" and self.repair_injections == 0:
-            self.repair_injections += 1
-            action = "repair"
-        else:
-            action = "continue"
-        return CheckpointDecision(action=action, message=_REPAIR_MESSAGE)
+        if event.kind == "final_answer":
+            return self._decide(await self.check())
+        if event.kind == "mutating_batch" and self.repair_injections > 0:
+            # The repair response used mutating tools and the work has now
+            # executed. Re-run the acceptance check once at this boundary and
+            # stop with the fresh evidence instead of ending silently.
+            await self.check()
+            return CheckpointDecision(action="stop")
+        # Mutating batches before any repair do not end a user turn; the check
+        # runs at the actual completion boundary to avoid interrupting useful
+        # multi-step work.
+        return CheckpointDecision()
 
     def snapshot(self) -> dict[str, Any]:
         result = self.last_result or {}

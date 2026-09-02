@@ -54,6 +54,10 @@ def _parse_profiles(
     treatment: str = TREATMENT_MODEL_ALONE,
     assisted_profiles: set[str] | None = None,
 ) -> list[Profile]:
+    known = {spec.partition("=")[0] for spec in specs or []}
+    unknown = (assisted_profiles or set()) - known
+    if unknown:
+        raise SystemExit(f"unknown --assisted-profile name(s): {sorted(unknown)}")
     profiles: list[Profile] = []
     for spec in specs or []:
         name, _, path_and_model = spec.partition("=")

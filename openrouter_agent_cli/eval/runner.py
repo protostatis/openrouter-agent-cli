@@ -95,6 +95,11 @@ class SuiteRunner:
         uses_real = any(not p.uses_mock for p in profiles)
         if not uses_real:
             return
+        if not os.environ.get("OPENROUTER_API_KEY", ""):
+            raise ValueError(
+                "real-model profiles require OPENROUTER_API_KEY in the "
+                "environment (or use a mock profile for offline runs)"
+            )
         from .sandbox import sandbox_available
 
         mode = _sandbox_mode()
@@ -206,7 +211,12 @@ class SuiteRunner:
                 else:
                     engine.model_transport = MockTransport(script)
             await engine.run()
-            record["engine"]["error"] = None
+            if getattr(engine, "terminal_status", "ok") != "ok":
+                record["engine"]["error"] = (
+                    f"engine terminal_status={engine.terminal_status}"
+                )
+            else:
+                record["engine"]["error"] = None
         except Exception as exc:  # factual capture; the record survives failures
             record["engine"]["error"] = f"{type(exc).__name__}: {exc}"
         finally:
@@ -256,6 +266,21 @@ class SuiteRunner:
         task_by_id = {t.id: t for t in self.suite.tasks}
         for record in records:
             if record.get("verdict") is not None:
+                continue
+            engine_error = (record.get("engine") or {}).get("error")
+            if engine_error:
+                # Provider/engine failures are infrastructure errors, not
+                # incomplete task work: never grade a broken attempt as a
+                # model task failure.
+                evidence = f"engine error: {engine_error}"
+                update_verdict(
+                    self.runs_path,
+                    record["run_id"],
+                    "infrastructure_error",
+                    evidence,
+                )
+                record["verdict"] = "infrastructure_error"
+                record["verdict_evidence"] = evidence
                 continue
             task = task_by_id[record["task_id"]]
             verdict = run_verifier(

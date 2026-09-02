@@ -52,6 +52,12 @@ def test_real_model_attempt_fails_closed_without_acknowledgement(tmp_path, monke
     suite = load_suite(Path(__file__).resolve().parents[1] / "eval_suites" / "coding_smoke_v1" / "suite.json")
     monkeypatch.delenv("AGENT_EVAL_ALLOW_HOST_EXECUTION", raising=False)
     monkeypatch.delenv("AGENT_EVAL_SANDBOX", raising=False)
+    # Missing credentials fail closed before the sandbox gate.
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        SuiteRunner(
+            suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e"
+        )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     if sandbox.sandbox_available():
         runner = SuiteRunner(
             suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e"

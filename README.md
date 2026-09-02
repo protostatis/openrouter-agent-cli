@@ -431,7 +431,9 @@ Evaluator artifacts:
 
 The repository includes a small evaluation workflow that runs the real CLI
 engine, real tool layer, and real task verifiers. The mock profile is fully
-offline: it makes no provider calls and is safe for a fresh checkout.
+offline: it makes no provider calls. Suite manifests and mock scripts are
+trusted operator-provided input: their commands execute on the host inside a
+disposable working directory, so review them like test code before running.
 
 After installing the source checkout with `pip install -e .`:
 

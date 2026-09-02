@@ -93,6 +93,18 @@ class CacheAwareContext:
         self.stable_prefix_tokens = 0
         self.prefix_fingerprint = None
 
+    def reset_transient(self) -> None:
+        """Drop the pairwise prefix baseline without counting a compaction.
+
+        Used when the conversation identity changes (session switch / new
+        session / history clear), where the next request starts a fresh prefix
+        instead of claiming continuity with the old conversation.
+        """
+        self._previous_hashes = []
+        self.stable_prefix_messages = 0
+        self.stable_prefix_tokens = 0
+        self.prefix_fingerprint = None
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
