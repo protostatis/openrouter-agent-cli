@@ -23,6 +23,8 @@ from collections import defaultdict
 from statistics import NormalDist
 from typing import Any
 
+from .records import model_alone_records
+
 _Z_95 = NormalDist().inv_cdf(0.975)
 
 
@@ -46,6 +48,7 @@ def _paired_task_table(records: list[dict[str, Any]]) -> dict[str, dict[str, flo
     """task_id -> {profile: mean pass fraction}; keeps only tasks verified for
     ALL profiles. Replicate attempts (same task+profile, e.g. multiple rounds)
     are AGGREGATED (averaged), never overwritten."""
+    records = model_alone_records(records)
     per_pair: dict[tuple[str, str], list[int]] = defaultdict(list)
     for r in records:
         verdict = r.get("verdict")
@@ -103,6 +106,7 @@ def paired_bootstrap(
 
 
 def render_uncertainty(records: list[dict[str, Any]]) -> list[str]:
+    records = model_alone_records(records)
     lines: list[str] = []
     # Per-profile Wilson intervals over all verified attempts.
     per_profile: dict[str, list[int]] = defaultdict(lambda: [0, 0])

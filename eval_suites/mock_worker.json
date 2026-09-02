@@ -1,10 +1,10 @@
 {
   "responses": [
     {"tool_calls": [
-      {"name": "run_bash",
-       "arguments": {"command": "printf 'def greet():\\n    return \"hello from greet\"\\n' > greet.py"}},
-      {"name": "run_bash",
-       "arguments": {"command": "printf 'from greet import greet\\nassert greet() == \"hello from greet\"\\n' > test_greet.py"}},
+       {"name": "run_bash",
+        "arguments": {"command": "printf '%b' 'def greet():\\n    return \"hello from greet\"\\n' > greet.py"}},
+       {"name": "run_bash",
+        "arguments": {"command": "printf '%b' 'from greet import greet\\nassert greet() == \"hello from greet\"\\n' > test_greet.py"}},
       {"name": "run_bash",
        "arguments": {"command": "printf 'def add(a, b):\\n    return a + b\\n' > sumlib.py"}},
       {"name": "run_bash",

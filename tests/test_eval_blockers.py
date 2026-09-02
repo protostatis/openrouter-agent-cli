@@ -1,14 +1,12 @@
 """Regression tests for the advisor-identified merge blockers."""
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from openrouter_agent_cli.eval.records import make_record, append_record
+from openrouter_agent_cli.eval import sandbox
 from openrouter_agent_cli.eval.uncertainty import paired_bootstrap, render_uncertainty
 from openrouter_agent_cli.eval.runner import Profile, SuiteRunner
 from openrouter_agent_cli.eval.suite import load_suite
@@ -50,11 +48,18 @@ def test_two_replicates_are_aggregated_not_overwritten():
     assert entry["ci"][1] == pytest.approx(0.0)
 
 
-def test_real_model_attempt_fails_closed_without_acknowledgement(tmp_path):
+def test_real_model_attempt_fails_closed_without_acknowledgement(tmp_path, monkeypatch):
     suite = load_suite(Path(__file__).resolve().parents[1] / "eval_suites" / "coding_smoke_v1" / "suite.json")
-    os.environ.pop("AGENT_EVAL_ALLOW_HOST_EXECUTION", None)
-    with pytest.raises(ValueError, match="AGENT_EVAL_ALLOW_HOST_EXECUTION"):
-        SuiteRunner(suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e")
+    monkeypatch.delenv("AGENT_EVAL_ALLOW_HOST_EXECUTION", raising=False)
+    monkeypatch.delenv("AGENT_EVAL_SANDBOX", raising=False)
+    if sandbox.sandbox_available():
+        runner = SuiteRunner(
+            suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e"
+        )
+        assert runner._sandboxed is True
+    else:
+        with pytest.raises(ValueError, match="AGENT_EVAL_ALLOW_HOST_EXECUTION"):
+            SuiteRunner(suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e")
 
 
 def test_verdict_is_immutable_even_for_identical_verdict(tmp_path):

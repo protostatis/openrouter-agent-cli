@@ -1,7 +1,8 @@
 # Experiment Contract — Verify-Before-Accepting-Completion
 
-**Status:** contract per advisor review 2026-08-31. A feasibility
-experiment, not a product commitment. One-page intent; boundaries explicit.
+**Status:** contract per advisor review 2026-08-31. The local prototype is
+implemented and tested. A feasibility experiment, not a product commitment.
+One-page intent; boundaries explicit.
 
 ## Purpose
 
@@ -60,9 +61,14 @@ Three-result probe, run host-side on the attempt workspace:
 
 ## Feasibility run (predeclared)
 
-- Existing 12-task suite (crash-diagnosis family), **one model**.
-- 2 modes (baseline unassisted vs verifier-assisted) × 2 repeats = **48
-  attempts**.
+- Intended suite: the existing 12-task crash-diagnosis family, **one model**.
+  The checked-in `eval_suites/crash_novel_v1/suite.json` currently contains 10
+  tasks, not 12.
+- **Execution amendment approved 2026-08-31:** proceed with the checked-in
+  10-task suite for this feasibility run. Two treatments × two repeats produces
+  40 attempts; this run is explicitly not the original 48-attempt claim.
+- 2 modes (baseline unassisted vs verifier-assisted) × 2 repeats = **40
+  attempts** for the amended 10-task run.
 - Success criteria (any of these makes the policy interesting; all-false
   means drop it): the mechanism fires at least once per run where the agent
   attempts completion; repair converts ≥1 failure to pass without breaking a
@@ -74,3 +80,13 @@ Three-result probe, run host-side on the attempt workspace:
 Protected-file prevention (needs pre-execution tool mediation + containment);
 per-tool-call verification (races/half-finished batches); heterogeneous
 agent adapters (Inspect Agent Bridge pattern — copy later); routing.
+
+## Follow-up gate after the feasibility run
+
+The feasibility run is complete, but the Linux controller rejected its
+systemd sleep-inhibitor preflight with `Access denied`; it therefore used a
+persistent `tmux` session without the inhibitor. That is recorded as an
+operational deviation and does not change the Bubblewrap result. Before any
+larger or confirmatory CLI campaign, the controller must make the Linux
+inhibitor preflight succeed (or obtain an explicit feasibility-only waiver),
+run the completed-record audit, and freeze a new CLI-specific preregistration.

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from openrouter_agent_cli.eval.records import load_records
+from openrouter_agent_cli.eval.records import TREATMENT_MODEL_PLUS_POLICY
 from openrouter_agent_cli.eval.runner import Profile, SuiteRunner
 from openrouter_agent_cli.eval.suite import load_suite
 
@@ -26,12 +27,12 @@ _MOCK_DOES_WORK = {
         {"tool_calls": [
             {"name": "run_bash",
              "arguments": {"command":
-                           "printf 'def greet():\\n    return \"hello from greet\"\\n' > greet.py"}},
+                           "printf '%b' 'def greet():\\n    return \"hello from greet\"\\n' > greet.py"}},
         ]},
         {"tool_calls": [
             {"name": "run_bash",
              "arguments": {"command":
-                           "printf 'from greet import greet\\nassert greet() == \"hello from greet\"\\n' > test_greet.py"}},
+                           "printf '%b' 'from greet import greet\\nassert greet() == \"hello from greet\"\\n' > test_greet.py"}},
         ]},
         {"text": "Created greet.py and test_greet.py."},
     ]
@@ -128,6 +129,24 @@ def test_paired_counterbalanced_schedule_and_report(tmp_path: Path, suite: Path)
     assert "not a general ranking" in report  # honesty disclaimer present
 
 
+def test_repeated_schedule_rotates_profile_order(tmp_path: Path, suite: Path) -> None:
+    loaded = load_suite(suite)
+    profiles = [
+        Profile(name="worker", prompt="P1", mock_script=dict(_MOCK_DOES_WORK)),
+        Profile(name="lazy", prompt="P2", mock_script=dict(_MOCK_LAZY)),
+    ]
+    runner = SuiteRunner(loaded, profiles, eval_dir=tmp_path / "eval", repeats=2)
+    schedule = runner.build_schedule()
+
+    assert len(schedule) == len(loaded.tasks) * len(profiles) * 2
+    assert [p.name for _, p, _ in schedule[:2]] == ["worker", "lazy"]
+    repeat_start = len(loaded.tasks) * len(profiles)
+    assert [p.name for _, p, _ in schedule[repeat_start : repeat_start + 2]] == [
+        "lazy",
+        "worker",
+    ]
+
+
 def test_duplicate_run_id_verdict_is_immutable(tmp_path: Path, suite: Path) -> None:
     from openrouter_agent_cli.eval.records import (
         append_record, load_records, make_record, new_run_id, update_verdict,
@@ -171,3 +190,62 @@ def test_run_suite_script(tmp_path: Path, suite: Path) -> None:
     assert proc.returncode == 0, proc.stderr[-800:]
     assert "pass=2" in proc.stdout          # both tasks pass
     assert "not a general ranking" in proc.stdout
+
+
+def test_verifier_assisted_runner_records_policy_and_final_agreement(
+    tmp_path: Path, suite: Path
+) -> None:
+    loaded = load_suite(suite)
+    runner = SuiteRunner(
+        loaded,
+        [
+            Profile(
+                name="assisted",
+                prompt="You are a coding agent.",
+                mock_script=Path(__file__).resolve().parents[1]
+                / "eval_suites"
+                / "mock_worker.json",
+                treatment=TREATMENT_MODEL_PLUS_POLICY,
+            )
+        ],
+        eval_dir=tmp_path / "eval",
+    )
+    records = asyncio.run(runner.run_and_verify())
+
+    assert len(records) == len(loaded.tasks)
+    assert all(r["treatment"] == TREATMENT_MODEL_PLUS_POLICY for r in records)
+    verdicts = {r["task_id"]: r["verdict"] for r in records}
+    assert verdicts["greet"] == "pass"
+    assert verdicts["sumlib"] == "pass"
+    assert sum(verdict == "pass" for verdict in verdicts.values()) == 2
+    assert all(r["policy"]["name"] == "verify-before-completion" for r in records)
+    assert all(r["policy"]["probe_final_verifier_disagreed"] is False for r in records)
+    assert all(
+        r["policy"]["repair_injections"] == (0 if r["verdict"] == "pass" else 1)
+        for r in records
+    )
+    on_disk = load_records(runner.runs_path)
+    assert on_disk[0]["policy"]["probe_final_verifier_disagreed"] is False
+
+
+def test_eval_module_rejects_missing_profile(tmp_path: Path, suite: Path) -> None:
+    """The public module entry point gives a useful offline-safe error."""
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "openrouter_agent_cli.eval.cli",
+            "--suite",
+            str(suite),
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "at least one --profile is required" in proc.stderr

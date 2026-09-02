@@ -95,23 +95,34 @@ def test_engine_bash_runner_delegation(tmp_path):
     assert engine2.bash_runner is None
 
 
-def test_runner_gate_and_sandbox_wiring(tmp_path):
-    """Mock mode: no gate, no sandbox. Real mode on non-Linux: fails closed
-    unless acknowledged; with sandbox forced on + unavailable, fails closed."""
+def test_runner_gate_and_sandbox_wiring(tmp_path, monkeypatch):
+    """Mock mode is unrestricted; real mode requires sandbox or an explicit ack."""
     suite = load_suite(Path(__file__).resolve().parents[1] / "eval_suites" / "coding_smoke_v1" / "suite.json")
-    os.environ.pop("AGENT_EVAL_ALLOW_HOST_EXECUTION", None)
-    os.environ.pop("AGENT_EVAL_SANDBOX", None)
+    monkeypatch.delenv("AGENT_EVAL_ALLOW_HOST_EXECUTION", raising=False)
+    monkeypatch.delenv("AGENT_EVAL_SANDBOX", raising=False)
 
     # mock profiles pass regardless of sandbox/gate
     runner = SuiteRunner(suite, [Profile(name="mock", prompt="P", mock_script={"responses": [{"text": "x"}]})], eval_dir=tmp_path / "e")
     assert runner._sandboxed is False
 
-    # real profile without ack and without sandbox -> fail closed
-    with pytest.raises(ValueError, match="AGENT_EVAL_ALLOW_HOST_EXECUTION"):
-        SuiteRunner(suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e2")
+    # Real profiles use containment when it is available; otherwise they fail
+    # closed instead of silently executing with host permissions.
+    if sandbox.sandbox_available():
+        contained = SuiteRunner(
+            suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e2"
+        )
+        assert contained._sandboxed is True
+    else:
+        with pytest.raises(ValueError, match="AGENT_EVAL_ALLOW_HOST_EXECUTION"):
+            SuiteRunner(suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e2")
 
     # forced sandbox with no bwrap available -> fail closed with sandbox msg
-    os.environ["AGENT_EVAL_SANDBOX"] = "1"
-    with pytest.raises(ValueError, match="AGENT_EVAL_SANDBOX=1 requested but the Bubblewrap"):
-        SuiteRunner(suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e3")
-    os.environ.pop("AGENT_EVAL_SANDBOX", None)
+    monkeypatch.setenv("AGENT_EVAL_SANDBOX", "1")
+    if sandbox.sandbox_available():
+        forced = SuiteRunner(
+            suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e3"
+        )
+        assert forced._sandboxed is True
+    else:
+        with pytest.raises(ValueError, match="AGENT_EVAL_SANDBOX=1 requested but the Bubblewrap"):
+            SuiteRunner(suite, [Profile(name="real", prompt="P")], eval_dir=tmp_path / "e3")

@@ -11,6 +11,7 @@ Modules:
 - ``transport`` scripted MockTransport at the engine's model-call seam
 - ``runner``   paired, counterbalanced suite execution
 - ``compare``  descriptive paired-comparison report
+- ``audit``    structural integrity checks for completed campaigns
 
 Design rules (see docs/eval-integration.md):
 - Records state facts only; "success" is claimed solely by a verifier.

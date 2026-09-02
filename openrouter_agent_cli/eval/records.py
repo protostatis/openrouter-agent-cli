@@ -15,7 +15,24 @@ import time
 from pathlib import Path
 from typing import Any
 
-RECORDS_SCHEMA_VERSION = "agent-eval-run-record-v1"
+RECORDS_SCHEMA_VERSION = "agent-eval-run-record-v2"
+TREATMENT_MODEL_ALONE = "model_alone"
+TREATMENT_MODEL_PLUS_POLICY = "model_plus_policy"
+
+
+def record_treatment(record: dict[str, Any]) -> str:
+    """Return the explicit treatment, treating legacy rows as unassisted."""
+    return str(record.get("treatment") or TREATMENT_MODEL_ALONE)
+
+
+def model_alone_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only records valid for the ordinary model-performance report."""
+    return [r for r in records if record_treatment(r) == TREATMENT_MODEL_ALONE]
+
+
+def model_plus_policy_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep verifier-assisted rows for the separate policy report."""
+    return [r for r in records if record_treatment(r) == TREATMENT_MODEL_PLUS_POLICY]
 
 
 def default_runs_dir() -> Path:
@@ -46,6 +63,7 @@ def make_record(
     transport: str,
     workdir: str,
     scheduled_index: int,
+    treatment: str = TREATMENT_MODEL_ALONE,
 ) -> dict[str, Any]:
     """Build the initial record for one scheduled attempt (verdict pending)."""
     return {
@@ -60,12 +78,16 @@ def make_record(
         },
         "model": model,
         "transport": transport,  # "openrouter" | "mock:<script>"
+        # Missing treatment on legacy records is interpreted as model_alone by
+        # reporting helpers; new records always carry it explicitly.
+        "treatment": treatment,
         "workspace": workdir,
         "scheduled_index": scheduled_index,
         "engine": {"session_dir": None, "finish_reason": None, "error": None},
         "usage": {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
         "timing": {"started_at": None, "ended_at": None, "latency_seconds": None},
         "tool_calls": [],  # [{name, ok, duration_ms, brief}]
+        "policy": None,  # populated for model_plus_policy attempts
         "verdict": None,  # filled only by verify.py: pass|task_fail|infrastructure_error
         "verdict_evidence": None,
     }
@@ -89,7 +111,12 @@ def load_records(path: Path) -> list[dict[str, Any]]:
 
 
 def update_verdict(
-    path: Path, run_id: str, verdict: str, evidence: str
+    path: Path,
+    run_id: str,
+    verdict: str,
+    evidence: str,
+    *,
+    extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fill the verdict on an existing record. Rewrite-in-place is safe because
     verdict assignment is rejected outright per run_id and the file is campaign-local.
@@ -107,6 +134,8 @@ def update_verdict(
         )
     rec["verdict"] = verdict
     rec["verdict_evidence"] = evidence
+    if extra_fields:
+        rec.update(extra_fields)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         for r in rows:

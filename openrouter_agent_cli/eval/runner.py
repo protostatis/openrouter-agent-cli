@@ -22,13 +22,17 @@ from pathlib import Path
 from typing import Any
 
 from ..cli import OpenRouterAgentCLI, ToolPermissionPolicy
+from .audit import assert_audited
 from .records import (
     append_record,
     default_runs_dir,
     make_record,
     new_run_id,
+    TREATMENT_MODEL_ALONE,
+    TREATMENT_MODEL_PLUS_POLICY,
     update_verdict,
 )
+from .policy import VerifierAssistedPolicy, finalize_snapshot
 from .suite import Suite, Task, make_fresh_workspace
 from .transport import MockTransport
 from .verify import run_verifier
@@ -42,7 +46,15 @@ class Profile:
     prompt: str
     mock_script: dict[str, Any] | str | Path | None = None
     model: str = "mock-model"  # real-model profiles set their model name
+    treatment: str = TREATMENT_MODEL_ALONE
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.treatment not in {TREATMENT_MODEL_ALONE, TREATMENT_MODEL_PLUS_POLICY}:
+            raise ValueError(
+                f"unknown treatment {self.treatment!r}; expected "
+                f"{TREATMENT_MODEL_ALONE!r} or {TREATMENT_MODEL_PLUS_POLICY!r}"
+            )
 
     @property
     def uses_mock(self) -> bool:
@@ -66,6 +78,7 @@ class SuiteRunner:
         max_turns: int = 10,
         command_timeout: int = 30,
         workspace_root: Path | None = None,
+        repeats: int = 1,
     ):
         if not profiles:
             raise ValueError("at least one profile is required")
@@ -76,6 +89,7 @@ class SuiteRunner:
         self.max_turns = max_turns
         self.command_timeout = command_timeout
         self.workspace_root = workspace_root
+        self.repeats = max(1, repeats)
         # Execution-containment gate (runs after field init).
         self._sandboxed = False
         uses_real = any(not p.uses_mock for p in profiles)
@@ -113,11 +127,14 @@ class SuiteRunner:
         """Paired schedule: task-major, profile order rotated per task."""
         schedule: list[tuple[Task, Profile, int]] = []
         index = 0
-        for t_idx, task in enumerate(self.suite.tasks):
-            for offset, profile in enumerate(self.profiles):
-                chosen = self.profiles[(t_idx + offset) % len(self.profiles)]
-                schedule.append((task, chosen, index))
-                index += 1
+        for repeat in range(self.repeats):
+            for t_idx, task in enumerate(self.suite.tasks):
+                for offset, profile in enumerate(self.profiles):
+                    chosen = self.profiles[
+                        (t_idx + repeat + offset) % len(self.profiles)
+                    ]
+                    schedule.append((task, chosen, index))
+                    index += 1
         return schedule
 
     # -- execution ----------------------------------------------------------
@@ -141,13 +158,23 @@ class SuiteRunner:
             transport=(f"mock:script" if profile.uses_mock else "openrouter"),
             workdir=str(workspace),
             scheduled_index=index,
+            treatment=profile.treatment,
         )
         started = time.time()
         record["timing"]["started_at"] = time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)
         )
         engine: OpenRouterAgentCLI | None = None
+        policy: VerifierAssistedPolicy | None = None
         try:
+            if profile.treatment == TREATMENT_MODEL_PLUS_POLICY:
+                policy = VerifierAssistedPolicy(
+                    verifier_command=task.verifier_command,
+                    workspace=workspace,
+                    trusted_cwd=self.suite.path.parent,
+                    timeout_s=task.verifier_timeout_s,
+                    contained=self._sandboxed,
+                )
             engine = OpenRouterAgentCLI(
                 api_key="eval-not-a-real-key" if profile.uses_mock
                 else os.environ.get("OPENROUTER_API_KEY", ""),
@@ -170,6 +197,8 @@ class SuiteRunner:
 
                 engine.bash_runner = BubblewrapBashRunner(str(workspace))
                 record["engine"]["sandbox"] = "bubblewrap"
+            if policy is not None:
+                engine.checkpoint_hook = policy
             if profile.uses_mock:
                 script = profile.mock_script
                 if isinstance(script, (str, Path)):
@@ -208,6 +237,10 @@ class SuiteRunner:
                     }
                     for rec in (engine._tool_records or {}).values()
                 ]
+            if policy is not None:
+                if engine is not None:
+                    policy.finish_engine(engine.session_tokens["total_tokens"])
+                record["policy"] = policy.snapshot()
         append_record(self.runs_path, record)
         return record
 
@@ -232,8 +265,19 @@ class SuiteRunner:
                 timeout_s=task.verifier_timeout_s,
                 contained=self._sandboxed,
             )
+            extra_fields: dict[str, Any] = {}
+            if record.get("treatment") == TREATMENT_MODEL_PLUS_POLICY:
+                policy_snapshot = record.get("policy")
+                if isinstance(policy_snapshot, dict):
+                    policy_snapshot = finalize_snapshot(policy_snapshot, verdict.verdict)
+                    record["policy"] = policy_snapshot
+                    extra_fields["policy"] = policy_snapshot
             update_verdict(
-                self.runs_path, record["run_id"], verdict.verdict, verdict.evidence
+                self.runs_path,
+                record["run_id"],
+                verdict.verdict,
+                verdict.evidence,
+                extra_fields=extra_fields,
             )
             record["verdict"] = verdict.verdict
             record["verdict_evidence"] = verdict.evidence
@@ -248,8 +292,17 @@ class SuiteRunner:
 
     async def run_and_verify(self) -> list[dict[str, Any]]:
         records = await self.run()
-        self.verify_all(records)
-        self.cleanup_workspaces(records)
+        try:
+            self.verify_all(records)
+            assert_audited(
+                records,
+                expected_task_ids=[task.id for task in self.suite.tasks],
+                expected_profile_names=[profile.name for profile in self.profiles],
+                expected_repeats=self.repeats,
+                require_containment=any(not profile.uses_mock for profile in self.profiles),
+            )
+        finally:
+            self.cleanup_workspaces(records)
         return records
 
     def run_and_verify_sync(self) -> list[dict[str, Any]]:

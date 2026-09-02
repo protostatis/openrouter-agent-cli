@@ -14,10 +14,16 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from .records import load_records
+from .records import (
+    load_records,
+    model_alone_records,
+    model_plus_policy_records,
+    record_treatment,
+)
 
 
 def _outcome_counts(records: list[dict[str, Any]]) -> dict[str, Counter]:
+    records = model_alone_records(records)
     by_profile: dict[str, Counter] = defaultdict(Counter)
     for r in records:
         by_profile[r["profile"]["name"]][r.get("verdict") or "not_verified"] += 1
@@ -25,11 +31,32 @@ def _outcome_counts(records: list[dict[str, Any]]) -> dict[str, Counter]:
 
 
 def paired_matrix(records: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    """task_id -> {profile_name: verdict} for tasks covered by all profiles."""
-    by_task: dict[str, dict[str, str]] = defaultdict(dict)
+    """task_id -> {profile_name: aggregate verdict} for shared tasks.
+
+    Repeated attempts are aggregated rather than silently overwritten. A task
+    with mixed pass/fail repeats is marked ``mixed`` and excluded from the
+    integer paired tally below.
+    """
+    records = model_alone_records(records)
+    by_task: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     for r in records:
-        by_task[r["task_id"]][r["profile"]["name"]] = r.get("verdict") or "not_verified"
-    return dict(by_task)
+        by_task[r["task_id"]][r["profile"]["name"]].append(
+            r.get("verdict") or "not_verified"
+        )
+    matrix: dict[str, dict[str, str]] = {}
+    for task_id, profiles in by_task.items():
+        matrix[task_id] = {}
+        for profile, verdicts in profiles.items():
+            if any(verdict == "not_verified" for verdict in verdicts):
+                aggregate = "not_verified"
+            elif all(verdict == "pass" for verdict in verdicts):
+                aggregate = "pass"
+            elif all(verdict == "task_fail" for verdict in verdicts):
+                aggregate = "task_fail"
+            else:
+                aggregate = "mixed"
+            matrix[task_id][profile] = aggregate
+    return matrix
 
 
 def paired_tally(records: list[dict[str, Any]]) -> dict[tuple[str, str], Counter]:
@@ -39,7 +66,7 @@ def paired_tally(records: list[dict[str, Any]]) -> dict[tuple[str, str], Counter
     profiles = sorted({r["profile"]["name"] for r in records})
     tally: dict[tuple[str, str], Counter] = defaultdict(Counter)
     for outcomes in matrix.values():
-        if len(outcomes) < 2 or any(v == "not_verified" for v in outcomes.values()):
+        if len(outcomes) < 2 or any(v not in {"pass", "task_fail"} for v in outcomes.values()):
             continue
         for a in profiles:
             for b in profiles:
@@ -58,7 +85,82 @@ def paired_tally(records: list[dict[str, Any]]) -> dict[tuple[str, str], Counter
     return dict(tally)
 
 
+def paired_treatment_tally(
+    records: list[dict[str, Any]],
+) -> dict[tuple[str, str], Counter]:
+    """Compare unassisted and verifier-assisted attempts by task and repeat.
+
+    Repeats have no separate field in the v2 record contract, so attempts are
+    paired by their scheduled order within each task and treatment.  The runner
+    creates exactly this order and the record audit checks its completeness.
+    """
+    baseline = model_alone_records(records)
+    assisted = model_plus_policy_records(records)
+    by_group: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in baseline + assisted:
+        by_group[
+            (
+                record["task_id"],
+                record["profile"]["name"],
+                "baseline" if record_treatment(record) == "model_alone" else "assisted",
+            )
+        ].append(record)
+    for rows in by_group.values():
+        rows.sort(key=lambda record: record["scheduled_index"])
+
+    baseline_profiles = sorted({r["profile"]["name"] for r in baseline})
+    assisted_profiles = sorted({r["profile"]["name"] for r in assisted})
+    task_ids = sorted({r["task_id"] for r in baseline} & {r["task_id"] for r in assisted})
+    tally: dict[tuple[str, str], Counter] = defaultdict(Counter)
+    for baseline_profile in baseline_profiles:
+        for assisted_profile in assisted_profiles:
+            counter = tally[(baseline_profile, assisted_profile)]
+            for task_id in task_ids:
+                baseline_rows = by_group[(task_id, baseline_profile, "baseline")]
+                assisted_rows = by_group[(task_id, assisted_profile, "assisted")]
+                for left, right in zip(baseline_rows, assisted_rows):
+                    outcomes = (left.get("verdict"), right.get("verdict"))
+                    if not all(outcome in {"pass", "task_fail"} for outcome in outcomes):
+                        continue
+                    counter["paired_attempts"] += 1
+                    if outcomes == ("pass", "pass"):
+                        counter["both_pass"] += 1
+                    elif outcomes == ("pass", "task_fail"):
+                        counter["baseline_only_pass"] += 1
+                    elif outcomes == ("task_fail", "pass"):
+                        counter["assisted_only_pass"] += 1
+                    else:
+                        counter["neither_pass"] += 1
+    return {key: value for key, value in tally.items() if value["paired_attempts"]}
+
+
+def assisted_cost_table(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Resource totals for the separate verifier-assisted treatment report."""
+    rows_by_profile: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in model_plus_policy_records(records):
+        rows_by_profile[record["profile"]["name"]].append(record)
+    table: dict[str, dict[str, Any]] = {}
+    for name, rows in rows_by_profile.items():
+        latencies = [(r.get("timing") or {}).get("latency_seconds") or 0 for r in rows]
+        table[name] = {
+            "attempts": len(rows),
+            "total_tokens": sum(
+                (r.get("usage") or {}).get("total_tokens") or 0 for r in rows
+            ),
+            "median_latency_s": sorted(latencies)[len(latencies) // 2] if latencies else None,
+            "added_tokens": sum(
+                int((r.get("policy") or {}).get("added_tokens") or 0) for r in rows
+            ),
+            "added_time_s": sum(
+                float((r.get("policy") or {}).get("added_time_seconds") or 0.0)
+                for r in rows
+            ),
+        }
+    return table
+
+
 def cost_table(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    records = model_alone_records(records)
     by_profile: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in records:
         by_profile[r["profile"]["name"]].append(r)
@@ -87,6 +189,7 @@ def leaderboard(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     from .uncertainty import paired_bootstrap, wilson_interval
 
+    records = model_alone_records(records)
     per_profile: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for r in records:
         verdict = r.get("verdict")
@@ -167,6 +270,9 @@ def render_leaderboard(records: list[dict[str, Any]]) -> str:
 
 
 def render_report(records: list[dict[str, Any]]) -> str:
+    all_records = records
+    assisted_records = model_plus_policy_records(all_records)
+    records = model_alone_records(all_records)
     lines: list[str] = []
     counts = _outcome_counts(records)
     lines.append("## Outcome counts per profile")
@@ -206,6 +312,67 @@ def render_report(records: list[dict[str, Any]]) -> str:
     lines.extend(render_uncertainty(records))
     lines.append("")
     lines.append(render_leaderboard(records))
+    if assisted_records:
+        lines.append("")
+        lines.append("## Verifier-assisted outcomes (not included in ordinary leaderboard)")
+        lines.append(
+            "(these rows measure the completion policy, not ordinary model performance)"
+        )
+        by_profile: dict[str, Counter] = defaultdict(Counter)
+        for record in assisted_records:
+            by_profile[record["profile"]["name"]][
+                record.get("verdict") or "not_verified"
+            ] += 1
+        for name, counter in sorted(by_profile.items()):
+            repairs = sum(
+                int((record.get("policy") or {}).get("repair_injections") or 0)
+                for record in assisted_records
+                if record["profile"]["name"] == name
+            )
+            disagreements = sum(
+                bool((record.get("policy") or {}).get("probe_final_verifier_disagreed"))
+                for record in assisted_records
+                if record["profile"]["name"] == name
+            )
+            added_tokens = sum(
+                int((record.get("policy") or {}).get("added_tokens") or 0)
+                for record in assisted_records
+                if record["profile"]["name"] == name
+            )
+            added_time = sum(
+                float((record.get("policy") or {}).get("added_time_seconds") or 0.0)
+                for record in assisted_records
+                if record["profile"]["name"] == name
+            )
+            lines.append(
+                f"  {name}: pass={counter['pass']} task_fail={counter['task_fail']} "
+                f"infra={counter['infrastructure_error']} unverified={counter['not_verified']} "
+                f"repairs={repairs} added_tokens={added_tokens} "
+                f"added_time={added_time:.3f}s probe_final_disagreements={disagreements}"
+            )
+        lines.append("")
+        lines.append("## Verifier-assisted resource use")
+        lines.append("(total model tokens and policy-attributable repair overhead)")
+        for name, entry in sorted(assisted_cost_table(all_records).items()):
+            lines.append(
+                f"  {name}: attempts={entry['attempts']} tokens={entry['total_tokens']} "
+                f"median_latency={entry['median_latency_s']}s "
+                f"added_tokens={entry['added_tokens']} "
+                f"added_time={entry['added_time_s']:.3f}s"
+            )
+        policy_tally = paired_treatment_tally(all_records)
+        if policy_tally:
+            lines.append("")
+            lines.append("## Paired outcomes: unassisted baseline vs verifier-assisted policy")
+            lines.append(
+                "(matching task/repeat attempts; assisted rows remain outside the ordinary leaderboard)"
+            )
+            for (baseline, assisted), counter in sorted(policy_tally.items()):
+                lines.append(
+                    f"  {baseline} vs {assisted}: baseline_only={counter['baseline_only_pass']} "
+                    f"assisted_only={counter['assisted_only_pass']} "
+                    f"both={counter['both_pass']} neither={counter['neither_pass']}"
+                )
     return "\n".join(lines)
 
 
