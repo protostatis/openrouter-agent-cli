@@ -36,6 +36,9 @@ Repository = "https://github.com/protostatis/openrouter-agent-cli"
 
 [project.scripts]
 openrouter-agent = "openrouter_agent_cli.cli:main"
+openrouter-agent-eval = "openrouter_agent_cli.eval.cli:main"
+openrouter-agent-eval-audit = "openrouter_agent_cli.eval.audit:main"
+openrouter-agent-self-test = "openrouter_agent_cli.selftest:main"
 
 [dependency-groups]
 dev = [

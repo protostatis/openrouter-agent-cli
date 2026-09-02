@@ -7,6 +7,7 @@ import asyncio
 import copy
 import difflib
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -63,6 +64,8 @@ from openrouter_agent_cli.utils import (
     call_openrouter,
     run_bash,
 )
+from openrouter_agent_cli.cache import CacheAwareContext
+from openrouter_agent_cli.completion import UserCompletionPolicy, copy_result
 
 try:
     from openrouter_agent_cli.concurrent import run_concurrent
@@ -117,6 +120,9 @@ SLASH_COMMANDS = [
     "/model",
     "/usage",
     "/status",
+    "/task",
+    "/verify",
+    "/check",
     "/context",
     "/compact",
     "/undo",
@@ -456,6 +462,38 @@ class ToolPermissionPolicy:
         return "ask"
 
 
+@dataclass(frozen=True)
+class RuntimeCheckpoint:
+    """Public engine event emitted at a completion-control boundary.
+
+    The event intentionally contains no workspace, verifier, tool-result, or
+    transcript details. Evaluation policies can observe the boundary without
+    coupling themselves to the engine's private tool bookkeeping.
+    """
+
+    sequence: int
+    kind: str  # final_answer | mutating_batch
+    turn: int
+    tool_names: tuple[str, ...]
+    observed_at: float
+    total_tokens: int
+
+
+@dataclass(frozen=True)
+class CheckpointDecision:
+    """Control response for a ``RuntimeCheckpoint`` callback."""
+
+    action: str = "continue"  # continue | repair | stop
+    message: str = ""
+
+
+_MUTATING_TOOLS = frozenset({"run_bash", "write_file", "edit_file"})
+_GENERIC_REPAIR_MESSAGE = (
+    "The trusted completion check did not pass. Inspect your changes and tests, "
+    "make any necessary repairs, and reply when the task is complete."
+)
+
+
 class OpenRouterAgentCLI:
     def __init__(
         self,
@@ -472,6 +510,9 @@ class OpenRouterAgentCLI:
         max_concurrency: int = 5,
         max_discover: int = 5,
         max_rounds: int = 2,
+        task: str | None = None,
+        verify_command: str | None = None,
+        cache_mode: str = "auto",
     ):
         self.api_key = api_key
         self.model = model
@@ -486,6 +527,7 @@ class OpenRouterAgentCLI:
         self.max_concurrency = max(1, min(16, max_concurrency))
         self.max_discover = max(1, min(10, max_discover))
         self.max_rounds = max(1, min(5, max_rounds))
+        self.cache_mode = cache_mode if cache_mode in {"auto", "off"} else "auto"
         self.non_interactive_mode = False
         # Optional bash-runner hook (evaluation sandbox seam). When set, it
         # replaces run_bash inside _run_bash and must return the same
@@ -513,9 +555,20 @@ class OpenRouterAgentCLI:
         self._active_state = "idle"
         self._active_state_since = time.monotonic()
         self._tool_records: dict[str, dict[str, Any]] = {}
+        # Optional evaluation/control-plane seam. The callback sees only the
+        # immutable RuntimeCheckpoint event and returns a small decision; it
+        # never receives the engine, transcript, workspace, or verifier data.
+        self.checkpoint_hook: Any | None = None
+        self._checkpoint_sequence = 0
+        self._checkpoint_repair_count = 0
+        self._checkpoint_repair_pending = False
         self._last_compaction_backup: list[dict[str, Any]] | None = None
         self._last_file_backup: dict[str, Any] | None = None
         self.one_shot_prompt: str | None = None
+        self.work_order: dict[str, Any] | None = None
+        self.completion_policy: UserCompletionPolicy | None = None
+        self._last_displayed_check: dict[str, Any] | None = None
+        self.cache_context = CacheAwareContext(mode=self.cache_mode)
         self.session_tokens: dict[str, int] = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -537,6 +590,10 @@ class OpenRouterAgentCLI:
         self._last_saved_at: float | None = None
         self._load_policy()
         self.messages = self._load_session()
+        if task or verify_command:
+            self.set_work_order(task or "", verify_command, save=True)
+        elif self.work_order and self.work_order.get("verify_command"):
+            self._install_completion_policy()
 
     def _log(self, message: str, *, end: str = "\n", style: str | None = None) -> None:
         target = sys.stderr if self.non_interactive_mode else sys.stdout
@@ -652,6 +709,9 @@ class OpenRouterAgentCLI:
             f"discovery:   {self.discovery_mode} | {discovery_state} | 30s timeout",
             f"context:     {non_system} messages, ~{estimated:,} tokens ({context_pct}%) / history limit {self.max_history_messages}",
             f"usage:       process {self.session_tokens['prompt_tokens']:,} prompt + {self.session_tokens['completion_tokens']:,} completion tokens",
+            f"cache:       {self.cache_context.snapshot()['provider_cache_status']} | stable prefix ~{self.cache_context.stable_prefix_tokens:,} tokens",
+            f"task:        {_strip_control_chars(str((self.work_order or {}).get('objective') or 'none'))}",
+            f"acceptance:  {_strip_control_chars(str((self.work_order or {}).get('status') or 'not configured'))}",
             f"activity:    {self._active_state} ({self._activity_age():.1f}s)",
         ]
 
@@ -722,6 +782,35 @@ class OpenRouterAgentCLI:
                         self._session_deny.clear()
                         self._batch_allow.clear()
                         self._batch_deny.clear()
+                stored_work_order = data.get("work_order")
+                if isinstance(stored_work_order, dict):
+                    self.work_order = {
+                        "objective": str(stored_work_order.get("objective") or ""),
+                        "verify_command": str(
+                            stored_work_order.get("verify_command") or ""
+                        ),
+                        "status": str(
+                            stored_work_order.get("status") or "not_verified"
+                        ),
+                        "last_check": stored_work_order.get("last_check"),
+                        "updated_at": stored_work_order.get("updated_at"),
+                    }
+                stored_cache = data.get("cache_context")
+                if self.cache_mode != "off" and isinstance(stored_cache, dict):
+                    for name in (
+                        "requests",
+                        "compactions",
+                        "stable_prefix_tokens",
+                        "stable_prefix_messages",
+                        "observed_cached_tokens",
+                        "provider_cache_observations",
+                    ):
+                        value = stored_cache.get(name)
+                        if isinstance(value, (int, float)) and value >= 0:
+                            setattr(self.cache_context, name, int(value))
+                    cached = stored_cache.get("last_cached_tokens")
+                    if isinstance(cached, (int, float)) and cached >= 0:
+                        self.cache_context.last_cached_tokens = int(cached)
                 return [{"role": "system", "content": self.system_prompt}] + stored
         except FileNotFoundError:
             pass
@@ -781,6 +870,8 @@ class OpenRouterAgentCLI:
             "system_prompt": self.system_prompt,
             "model": self.model,
             "workdir": str(Path(self.workdir).resolve()),
+            "work_order": self.work_order,
+            "cache_context": self.cache_context.snapshot(),
         }
         try:
             self._atomic_write_text(
@@ -790,6 +881,112 @@ class OpenRouterAgentCLI:
             self._last_saved_at = time.time()
         except Exception as e:
             print(_strip_control_chars(f"[session] Failed to save session: {e}"))
+
+    def _record_completion_result(self, result: dict[str, Any]) -> None:
+        if self.work_order is None:
+            return
+        self.work_order["status"] = str(result.get("status") or "not_verified")
+        self.work_order["last_check"] = {
+            "status": result.get("status"),
+            "exit_code": result.get("exit_code"),
+            "timed_out": bool(result.get("timed_out")),
+            "duration_ms": result.get("duration_ms"),
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "error": result.get("error", ""),
+            "changed_files": list(result.get("changed_files") or []),
+        }
+        self.work_order["updated_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+        )
+        self._last_displayed_check = None
+
+    def _install_completion_policy(self) -> None:
+        command = str((self.work_order or {}).get("verify_command") or "").strip()
+        if not command:
+            self.completion_policy = None
+            if self.checkpoint_hook is not None and isinstance(
+                self.checkpoint_hook, UserCompletionPolicy
+            ):
+                self.checkpoint_hook = None
+            return
+        self.completion_policy = UserCompletionPolicy(
+            command=command,
+            workdir=self.workdir,
+            timeout_seconds=max(1, min(self.command_timeout, 600)),
+            on_result=self._record_completion_result,
+        )
+        self.checkpoint_hook = self.completion_policy
+
+    def set_work_order(
+        self,
+        objective: str,
+        verify_command: str | None = None,
+        *,
+        save: bool = True,
+    ) -> None:
+        previous = self.work_order or {}
+        next_objective = objective.strip() or str(previous.get("objective") or "")
+        next_command = (
+            verify_command.strip()
+            if verify_command is not None
+            else str(previous.get("verify_command") or "")
+        )
+        self.work_order = {
+            "objective": next_objective,
+            "verify_command": next_command,
+            "status": "not_verified",
+            "last_check": None,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        self._install_completion_policy()
+        if save:
+            self._save_session()
+
+    def clear_work_order(self) -> None:
+        self.work_order = None
+        if isinstance(self.checkpoint_hook, UserCompletionPolicy):
+            self.checkpoint_hook = None
+        self.completion_policy = None
+        self._save_session()
+
+    def _display_check_result(self, result: dict[str, Any] | None) -> None:
+        if not result:
+            return
+        status = str(result.get("status") or "not_verified").upper()
+        command = _strip_control_chars(str(result.get("command") or ""))
+        detail = f"{command} ({result.get('duration_ms', 0)}ms)"
+        self._log(f"[acceptance] {status}: {detail}")
+        if result.get("exit_code") is not None:
+            self._log(f"[acceptance] exit_code={result['exit_code']}")
+        changed_files = result.get("changed_files") or []
+        if changed_files:
+            self._log(f"[acceptance] changed_files ({len(changed_files)}):")
+            for path in changed_files:
+                self._log(f"[acceptance]   {_strip_control_chars(str(path))}")
+        for name in ("stdout", "stderr", "error"):
+            value = str(result.get(name) or "").strip()
+            if value:
+                self._log(f"[acceptance] {name}: {_strip_control_chars(value)}")
+
+    def _work_order_message(self, user_text: str) -> str:
+        objective = str((self.work_order or {}).get("objective") or "").strip()
+        command = str((self.work_order or {}).get("verify_command") or "").strip()
+        if not objective and not command:
+            return user_text
+        objective = objective or "No task description configured."
+        acceptance = (
+            f"The CLI will run this acceptance command before accepting completion: {command}."
+            if command
+            else "No acceptance command is configured; report that the work is not verified."
+        )
+        return (
+            "Active coding work order (follow this for the current session):\n"
+            f"{objective}\n\n"
+            f"{acceptance}\n"
+            "Do not claim that the work is verified unless the command passes.\n\n"
+            f"Developer request:\n{user_text}"
+        )
 
     def _load_policy(self) -> None:
         try:
@@ -942,6 +1139,9 @@ class OpenRouterAgentCLI:
             print("  /model [id]           Show or set model")
             print("  /usage                Show message count + rough token estimate")
             print("  /status               Show model, session, cwd, policy, and context")
+            print("  /task [description]   Show or set the current coding task")
+            print("  /verify [command]     Show or set the acceptance command (or 'off')")
+            print("  /check                Run the acceptance command now")
             print("  /context [n]          Show last n messages (default 8)")
             print("  /compact [--preview]  Force conversation compaction or preview it")
             print("  /undo                 Undo last compaction or last file write/edit")
@@ -984,10 +1184,69 @@ class OpenRouterAgentCLI:
             print(f"  prompt_tokens       : {actual['prompt_tokens']}")
             print(f"  completion_tokens   : {actual['completion_tokens']}")
             print(f"History limit         : {self.max_history_messages}")
+            cache = self.cache_context.snapshot()
+            print(f"Cache mode            : {cache['mode']}")
+            print(f"Stable prefix         : ~{cache['stable_prefix_tokens']} tokens / {cache['stable_prefix_messages']} messages")
+            print(f"Provider cache        : {cache['provider_cache_status']}")
+            if cache["last_cached_tokens"] is not None:
+                print(f"Last cached tokens    : {cache['last_cached_tokens']}")
             return True
 
         if cmd == "/status":
             self._print_status()
+            return True
+
+        if cmd == "/task":
+            if not arg:
+                task = self.work_order or {}
+                print(f"Task: {task.get('objective') or 'not configured'}")
+                print(f"Acceptance status: {task.get('status') or 'not configured'}")
+                if task.get("verify_command"):
+                    print(f"Acceptance command: {task['verify_command']}")
+                return True
+            if arg.strip().lower() in {"clear", "off"}:
+                self.clear_work_order()
+                print("Task contract cleared.")
+                return True
+            self.set_work_order(arg)
+            print(f"Task set: {_strip_control_chars(arg)}")
+            if self.work_order and self.work_order.get("verify_command"):
+                print("Acceptance check retained.")
+            return True
+
+        if cmd == "/verify":
+            if not arg:
+                command = (self.work_order or {}).get("verify_command")
+                print(f"Acceptance command: {command or 'not configured'}")
+                return True
+            if arg.strip().lower() in {"clear", "off"}:
+                if self.work_order is not None:
+                    self.work_order["verify_command"] = ""
+                    self.work_order["status"] = "not_verified"
+                    self.work_order["last_check"] = None
+                    self._install_completion_policy()
+                    self._save_session()
+                print("Acceptance check cleared.")
+                return True
+            if self.work_order is None:
+                self.set_work_order("", arg)
+            else:
+                self.work_order["verify_command"] = arg.strip()
+                self.work_order["status"] = "not_verified"
+                self.work_order["last_check"] = None
+                self._install_completion_policy()
+                self._save_session()
+            print(f"Acceptance command set: {_strip_control_chars(arg)}")
+            return True
+
+        if cmd == "/check":
+            if self.completion_policy is None:
+                print("No acceptance command configured. Use /verify <command>.")
+                return True
+            result = await self.completion_policy.check()
+            self._display_check_result(result)
+            self._last_displayed_check = copy_result(result)
+            self._save_session()
             return True
 
         if cmd == "/context":
@@ -1048,6 +1307,10 @@ class OpenRouterAgentCLI:
             self._session_allow.clear()
             self._session_deny.clear()
             self._batch_deny.clear()
+            self.work_order = None
+            self.completion_policy = None
+            if isinstance(self.checkpoint_hook, UserCompletionPolicy):
+                self.checkpoint_hook = None
             self._resumed = False
             self._save_session()
             print("Session history cleared.")
@@ -1065,6 +1328,10 @@ class OpenRouterAgentCLI:
             self._session_allow.clear()
             self._session_deny.clear()
             self._batch_deny.clear()
+            self.work_order = None
+            self.completion_policy = None
+            if isinstance(self.checkpoint_hook, UserCompletionPolicy):
+                self.checkpoint_hook = None
             self._resumed = False
             self._save_session()
             print(
@@ -1362,6 +1629,8 @@ class OpenRouterAgentCLI:
             data = await call_openrouter(client, **request)
 
         usage = data.get("usage") or {}
+        if self.cache_mode != "off":
+            self.cache_context.observe_request(messages, usage)
         if usage:
             self.session_tokens["prompt_tokens"] += int(usage.get("prompt_tokens", 0))
             self.session_tokens["completion_tokens"] += int(
@@ -1489,6 +1758,7 @@ class OpenRouterAgentCLI:
             summary_entry,
             *tail,
         ]
+        self.cache_context.note_compaction()
         self._save_session()
         self._set_activity("idle")
         return True
@@ -2584,11 +2854,109 @@ class OpenRouterAgentCLI:
         )
         return result
 
+    async def _run_checkpoint(
+        self,
+        *,
+        kind: str,
+        turn: int,
+        tool_names: tuple[str, ...] = (),
+    ) -> CheckpointDecision:
+        """Emit one narrow control-plane event and normalize its decision."""
+        hook = self.checkpoint_hook
+        if hook is None:
+            return CheckpointDecision()
+        self._checkpoint_sequence += 1
+        event = RuntimeCheckpoint(
+            sequence=self._checkpoint_sequence,
+            kind=kind,
+            turn=turn,
+            tool_names=tool_names,
+            observed_at=time.time(),
+            total_tokens=self.session_tokens["total_tokens"],
+        )
+        try:
+            decision = hook(event)
+            if inspect.isawaitable(decision):
+                decision = await decision
+        except Exception as exc:
+            # A control-plane failure must not turn a model attempt into a
+            # repair or a false task failure. The policy records its own
+            # verifier failures as infrastructure_error; unexpected hook
+            # failures fail open here.
+            self._log(f"[checkpoint] hook failed; continuing without intervention: {exc}")
+            return CheckpointDecision()
+        if isinstance(decision, CheckpointDecision):
+            normalized = decision
+        elif isinstance(decision, dict):
+            normalized = CheckpointDecision(
+                action=str(decision.get("action") or "continue"),
+                message=str(decision.get("message") or ""),
+            )
+        else:
+            normalized = CheckpointDecision()
+        if normalized.action not in {"continue", "repair", "stop"}:
+            self._log(
+                f"[checkpoint] invalid action {normalized.action!r}; continuing "
+                "without intervention"
+            )
+            return CheckpointDecision()
+        return normalized
+
+    def _apply_checkpoint_decision(self, decision: CheckpointDecision) -> str:
+        """Apply a policy decision and return the effective action."""
+        if decision.action != "repair":
+            return decision.action
+        if self._checkpoint_repair_count >= 1:
+            self._log("[checkpoint] repair limit reached; stopping without another injection")
+            return "stop"
+        self._checkpoint_repair_count += 1
+        self._checkpoint_repair_pending = True
+        self.messages.append(
+            {
+                "role": "user",
+                "content": decision.message or _GENERIC_REPAIR_MESSAGE,
+            }
+        )
+        self._log("[checkpoint] injected one generic repair request")
+        return "repair"
+
+    async def _handle_final_answer(
+        self,
+        text: str,
+        turn: int,
+    ) -> tuple[bool, str]:
+        """Checkpoint a final answer before displaying or accepting it.
+
+        Returns ``(True, "")`` when a repair request was injected and the
+        caller must perform the one permitted extra model response.
+        """
+        decision = await self._run_checkpoint(kind="final_answer", turn=turn)
+        if isinstance(self.checkpoint_hook, UserCompletionPolicy):
+            result = copy_result(self.completion_policy.last_result)
+            if result is not None and result != self._last_displayed_check:
+                self._display_check_result(result)
+                self._last_displayed_check = result
+        action = self._apply_checkpoint_decision(decision)
+        if action == "repair":
+            return True, ""
+        self._output_response(text)
+        self._save_session()
+        return False, text
+
     async def _run_user_turn(self, client: httpx.AsyncClient, user_text: str) -> str:
         self._turn_allow.clear()
         self._turn_deny.clear()
         self._batch_allow.clear()
         self._batch_deny.clear()
+        self._checkpoint_sequence = 0
+        self._checkpoint_repair_count = 0
+        self._checkpoint_repair_pending = False
+        if self.completion_policy is not None:
+            self.completion_policy.begin_turn()
+            self._last_displayed_check = None
+        if self.work_order is not None:
+            self.work_order["status"] = "not_verified"
+            self.work_order["last_check"] = None
         try:
             return await self._run_user_turn_impl(client, user_text)
         except asyncio.CancelledError:
@@ -2603,12 +2971,16 @@ class OpenRouterAgentCLI:
             self._set_activity("idle")
 
     async def _run_user_turn_impl(self, client: httpx.AsyncClient, user_text: str) -> str:
-        self.messages.append({"role": "user", "content": user_text})
+        self.messages.append(
+            {"role": "user", "content": self._work_order_message(user_text)}
+        )
         last_tool_signature: str | None = None
         repeated_count = 0
         discover_rounds = 0
 
-        for turn in range(self.max_turns):
+        turn = 0
+        turn_limit = self.max_turns
+        while turn < turn_limit:
             try:
                 if await self._compact_history(client):
                     self._log("[context] Auto-compacted old history.")
@@ -2636,9 +3008,17 @@ class OpenRouterAgentCLI:
                 text = message.get("content") or message.get("reasoning") or ""
                 if not text:
                     text = f"[empty response, finish_reason={finish_reason}]"
-                self._output_response(text)
-                self._save_session()
-                return text
+                should_continue, result = await self._handle_final_answer(
+                    text, turn + 1
+                )
+                if should_continue:
+                    # A repair request injected on the last configured turn is
+                    # allowed one additional model response.
+                    if turn + 1 >= turn_limit:
+                        turn_limit += 1
+                    turn += 1
+                    continue
+                return result
 
             signature = json.dumps(
                 [
@@ -2686,9 +3066,15 @@ class OpenRouterAgentCLI:
                     text = ""
                 if not text:
                     text = "I got stuck in a tool loop and could not make progress."
-                self._output_response(text)
-                self._save_session()
-                return text
+                should_continue, result = await self._handle_final_answer(
+                    text, turn + 1
+                )
+                if should_continue:
+                    if turn + 1 >= turn_limit:
+                        turn_limit += 1
+                    turn += 1
+                    continue
+                return result
 
             # Decode args first (preserve canonical JSON for log/replay)
             parsed_calls: list[tuple[str, dict[str, Any], str, dict]] = []
@@ -2844,6 +3230,33 @@ class OpenRouterAgentCLI:
 
             self.messages.extend(tool_results)
 
+            mutating_tool_names = tuple(
+                name for name, _, _, _ in parsed_calls if name in _MUTATING_TOOLS
+            )
+            if mutating_tool_names:
+                decision = await self._run_checkpoint(
+                    kind="mutating_batch",
+                    turn=turn + 1,
+                    tool_names=mutating_tool_names,
+                )
+                action = self._apply_checkpoint_decision(decision)
+                if action == "repair":
+                    if turn + 1 >= turn_limit:
+                        turn_limit += 1
+                    turn += 1
+                    continue
+                if action == "stop" or self._checkpoint_repair_pending:
+                    self._save_session()
+                    return ""
+
+            # A repair request grants exactly one additional model response.
+            # This guard also covers a response containing only read-only tools,
+            # for which no mutating-batch checkpoint is emitted.
+            if self._checkpoint_repair_pending:
+                self._save_session()
+                return ""
+
+            turn += 1
         self._log("[agent] Reached max turns for this user message.")
         self._save_session()
         return ""
@@ -2980,6 +3393,20 @@ def main() -> int:
         help=f"Default timeout in seconds for run_bash (default: {DEFAULT_COMMAND_TIMEOUT}).",
     )
     parser.add_argument(
+        "--task",
+        help="Explicit coding task contract to carry across a resumable session.",
+    )
+    parser.add_argument(
+        "--verify-command",
+        help="User-owned acceptance command to run before accepting a final answer.",
+    )
+    parser.add_argument(
+        "--cache-mode",
+        choices=["auto", "off"],
+        default=os.environ.get("OPENROUTER_AGENT_CACHE_MODE", "auto"),
+        help="Track stable context prefixes and explicit provider cache counters (default: auto).",
+    )
+    parser.add_argument(
         "--no-tools",
         action="store_true",
         help="Disable all tool calling.",
@@ -2992,6 +3419,11 @@ def main() -> int:
         "--eval-report",
         action="store_true",
         help="Print the evaluation report (.agent-eval) and exit.",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run the no-network end-to-end coding workflow self-test and exit.",
     )
     parser.add_argument(
         "--eval-dir",
@@ -3046,6 +3478,10 @@ def main() -> int:
         from openrouter_agent_cli.eval.report import main as _eval_report_main
 
         return _eval_report_main(["--eval-dir", args.eval_dir])
+    if args.self_test:
+        from openrouter_agent_cli.selftest import main as _self_test_main
+
+        return _self_test_main()
     # If --env-file was passed and not already loaded via early peek (e.g. quoted), ensure loaded
     if args.env_file and args.env_file != _explicit_env:
         _load_dotenv(args.env_file)
@@ -3090,6 +3526,9 @@ def main() -> int:
         max_concurrency=args.max_concurrency,
         max_discover=args.max_discover,
         max_rounds=args.max_rounds,
+        task=args.task,
+        verify_command=args.verify_command,
+        cache_mode=args.cache_mode,
     )
     cli._debug = bool(args.debug)
     if args.allow_discovery:

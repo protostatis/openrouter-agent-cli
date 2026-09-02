@@ -4,7 +4,10 @@ Standalone terminal agent for OpenRouter models with:
 - tool actions (`run_bash`, `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file`, `discover` web search/navigate)
 - interactive permission gating (`allow` / `deny` / `ask`)
 - session persistence
+- explicit coding task contracts with optional acceptance checks
 - context visibility and compaction
+- honest `verified` / `failed` / `not_verified` completion states
+- cache-aware context accounting without invented provider cache claims
 - concurrent `discover` batching (parallel tool calls → `max_concurrency`)
 - lifecycle status, scoped approvals, safe terminal rendering, and tool inspection
 - Markdown-rendered assistant replies and multi-line paste support in the scrollback REPL
@@ -55,6 +58,21 @@ Example:
 openrouter-agent --prompt "Explain tail recursion" --no-tools
 ```
 
+For a bounded coding task, give the session an objective and a developer-owned
+acceptance command:
+
+```bash
+openrouter-agent --workdir ./my-repo \
+  --task "Fix the failing login test" \
+  --verify-command "pytest tests/test_auth.py"
+```
+
+The command runs once at the completion boundary. A failing command receives at
+most one generic repair cycle; a timeout or execution error is reported as
+`not_verified` rather than treated as success. The workflow can be exercised
+without credentials or network access with `openrouter-agent-self-test` (or
+`openrouter-agent --self-test`).
+
 ## Useful flags
 
 ```bash
@@ -96,6 +114,9 @@ openrouter-agent --debug  # timestamps + idle instrumentation on stderr
 - `/model [id]`
 - `/usage`
 - `/status`
+- `/task [description]`
+- `/verify [command]` (use `off` to clear it)
+- `/check` (run the acceptance command immediately)
 - `/context [n]`
 - `/compact [--preview]`
 - `/undo` (last compaction or last file write/edit)
@@ -119,6 +140,9 @@ openrouter-agent --debug  # timestamps + idle instrumentation on stderr
 
 - history is saved in `~/.openrouter-agent-cli/sessions/<session_id>.json`
 - `/usage` shows a rough token estimate and process-only API counters
+- `/usage` also shows the stable context-prefix estimate and whether the
+  provider exposed explicit cache counters; `not observable` is a real state,
+  not a zero-cache claim
 - `/status` shows the active model, session, cwd, tool policy, context estimate, and
   current lifecycle state
 - `/compact` forces summarization; `/compact --preview` shows what would be summarized
@@ -402,6 +426,49 @@ Evaluator artifacts:
 - `evaluation.json` per-case raw evaluation details
 - `evaluation.csv` tabular scores
 - `leaderboard.md` aggregated per-prompt ranking
+
+## Offline evaluation workflow
+
+The repository includes a small evaluation workflow that runs the real CLI
+engine, real tool layer, and real task verifiers. The mock profile is fully
+offline: it makes no provider calls and is safe for a fresh checkout.
+
+After installing the source checkout with `pip install -e .`:
+
+```bash
+openrouter-agent-eval \
+  --suite eval_suites/coding_smoke_v1/suite.json \
+  --profile worker=eval_suites/mock_worker.json
+```
+
+The command writes append-only attempt records under `.agent-eval/runs/` and
+prints a paired report with pass counts, shared-task outcomes, token/latency
+accounting, uncertainty intervals, and the suite-specific leaderboard. To
+re-render an existing run without executing attempts:
+
+```bash
+openrouter-agent-eval \
+  --suite eval_suites/coding_smoke_v1/suite.json \
+  --eval-dir .agent-eval \
+  --report-only
+```
+
+To exercise both ordinary and verifier-assisted treatments fully offline,
+provide the mock profile twice and mark one profile as assisted:
+
+```bash
+openrouter-agent-eval \
+  --suite eval_suites/coding_smoke_v1/suite.json \
+  --profile baseline=eval_suites/mock_worker.json \
+  --profile assisted=eval_suites/mock_worker.json \
+  --assisted-profile assisted \
+  --repeats 2
+```
+
+The assisted rows are reported separately and are excluded from the ordinary
+model leaderboard. Prompt-file profiles make real OpenRouter calls and must
+only be used with an explicitly approved model budget and the documented
+execution-containment settings.
 
 ## Findings and release docs
 
