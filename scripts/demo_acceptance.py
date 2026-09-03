@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Narrated demo of the acceptance-check product.
+"""A sixty-second narrated demo of the acceptance-check product.
 
-Run with:  uv run python scripts/demo_acceptance.py            (failure branch, deterministic, offline)
-           uv run python scripts/demo_acceptance.py --live     (adds the real-model happy path)
+Run with:  uv run python scripts/demo_acceptance.py            (the core story, offline, ~10s)
+           uv run python scripts/demo_acceptance.py --live     (+ real-model happy path)
 
-The demo makes one point: the model's "done" answer is only a proposal. The
-developer's acceptance command decides whether the work is accepted, and the
-CLI reports verified / failed / not verified honestly with evidence.
+The story, in one line: an agent that is not allowed to say "I'm done" until
+a check YOU wrote passes. The agent proposes the work; the check disposes of
+the claim.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import io
-import json
 import os
 import shutil
 import subprocess
@@ -40,7 +39,11 @@ def acceptance_command() -> str:
 
 
 def section(title: str) -> None:
-    print(f"\n{'=' * 70}\n=== {title}\n{'=' * 70}")
+    print(f"\n{'=' * 60}\n{title}\n{'=' * 60}")
+
+
+def say(text: str) -> None:
+    print(text)
 
 
 def make_fixture() -> Path:
@@ -101,8 +104,8 @@ def _run_engine(
     model: str,
     mock: list[dict] | None,
     session_dir: Path,
-    quiet: bool = False,
 ) -> tuple["object", tuple[str, str]]:
+    """Drive the real engine silently; return (cli, (captured_stderr, captured_stdout))."""
     from openrouter_agent_cli.cli import OpenRouterAgentCLI, ToolPermissionPolicy
     from openrouter_agent_cli.eval.transport import MockTransport
 
@@ -122,173 +125,137 @@ def _run_engine(
         verify_command=acceptance_command(),
     )
     cli.non_interactive_mode = True
-    # Allow-all mirrors how the evaluation harness drives the same engine; the
-    # demo fixture is a disposable directory.
     cli.policy = ToolPermissionPolicy(allow={"*"})
     cli.one_shot_prompt = ONE_SHOT
     if mock is not None:
         cli.model_transport = MockTransport({"responses": mock})
 
-    captured: io.StringIO | None = io.StringIO() if quiet else None
-    captured_out: io.StringIO | None = io.StringIO() if quiet else None
-    real_stderr = sys.stderr
-    real_stdout = sys.stdout
-    if captured is not None:
-        sys.stderr = captured
-        sys.stdout = captured_out
-
-    async def go() -> "object":
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            await cli.run()
-        return cli
-
+    captured_err = io.StringIO()
+    captured_out = io.StringIO()
+    real_stderr, real_stdout = sys.stderr, sys.stdout
+    sys.stderr, sys.stdout = captured_err, captured_out
     try:
+        async def go() -> "object":
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                await cli.run()
+            return cli
         engine = asyncio.run(go())
     finally:
-        if captured is not None:
-            sys.stderr = real_stderr
-            sys.stdout = real_stdout
-    captured_text = captured.getvalue() if captured is not None else ""
-    captured_stdout = captured_out.getvalue() if captured_out is not None else ""
-    return engine, (captured_text, captured_stdout)
+        sys.stderr, sys.stdout = real_stderr, real_stdout
+    return engine, (captured_err.getvalue(), captured_out.getvalue())
 
 
-def _show_acceptance(prefix: str, cli: "object") -> None:
-    """Print the recorded acceptance evidence from a run, in demo form."""
+def _test_output(cli: "object") -> str:
     lc = (cli.work_order or {}).get("last_check") or {}
-    status = str(lc.get("status") or "not_verified").upper()
-    command = str(lc.get("command") or "")
-    print(f"[acceptance] {status}: {command} ({lc.get('duration_ms', 0)}ms)")
-    if lc.get("exit_code") is not None:
-        print(f"[acceptance] exit_code={lc['exit_code']}")
-    changed = lc.get("changed_files") or []
-    if changed:
-        print(f"[acceptance] changed_files: {', '.join(changed)}")
-    for name in ("stdout", "stderr"):
-        value = str(lc.get(name) or "").strip()
-        if value:
-            print(f"[acceptance] {name}:")
-            print("\n".join("    " + line for line in value.splitlines()[:8]))
-    print(prefix, end="")
+    return str(lc.get("stderr") or lc.get("stdout") or "").strip()
 
 
-def _show_outcome(cli: "object") -> None:
-    wo = cli.work_order or {}
-    lc = wo.get("last_check") or {}
-    print("\n--- honest outcome ---")
-    print(f"acceptance status : {wo.get('status')}")
-    print(f"check             : {lc.get('status')} exit={lc.get('exit_code')} {lc.get('duration_ms')}ms")
-    print(f"changed files     : {lc.get('changed_files')}")
-    print(f"repair responses  : {getattr(cli.completion_policy, 'repair_injections', '?')}")
-    print(f"model requests    : {cli.cache_context.requests}")
+def _show_claim(cli: "object", stdout_text: str, expected: str) -> None:
+    """Show the model's claim (the captured final text, deduplicated)."""
+    text = " ".join((stdout_text or "").split()).strip()
+    if text and text != expected:
+        say(f'       "{text}"')
+    else:
+        say(f'       "{expected}"')
 
 
-def run_baseline(workdir: Path) -> None:
-    section("0:15 — baseline: the acceptance command fails")
-    print(f"acceptance command: {acceptance_command()}")
-    proc = subprocess.run(
-        acceptance_command(), shell=True, cwd=workdir, capture_output=True, text=True
-    )
-    print(f"exit_code={proc.returncode}")
-    if proc.stderr.strip():
-        print(proc.stderr.strip()[-500:])
-    print("\n> The command decides the outcome. It fails now, so the work is not verified.")
-
-
-def failure_branch(workdir: Path, session_dir: Path) -> None:
-    section("1:30 — the distinctive failure branch (scripted model, real tools, real verifier)")
-    print("The model claims completion after a wrong fix. Watch what the CLI does with that claim.\n")
-
+def catch_story(workdir: Path, session_dir: Path) -> None:
+    """The core beat: the agent claims done, and it is wrong."""
     mock = [
-        # Turn 1: the model applies a WRONG fix (missing comma).
         {"tool_calls": [{"name": "edit_file", "arguments": {
             "path": "greet.py",
             "old_string": 'return "hello " + name',
-            "new_string": 'return "Hello " + name',
+            "new_string": 'return "Hello " + name',  # missing the comma
         }}]},
-        # Turn 2: it claims completion while the test still fails.
         {"text": "Done. I fixed the greeting and the test now passes."},
     ]
-    cli, _ = _run_engine(workdir, api_key="mock-key", model="mock-model", mock=mock,
-                         session_dir=session_dir, quiet=True)
+    cli, (_, stdout_text) = _run_engine(workdir, api_key="mock-key", model="mock-model",
+                                        mock=mock, session_dir=session_dir)
 
-    print("The model edits greet.py to  return \"Hello \" + name   (missing the comma)")
-    print("then claims:  \"Done. I fixed the greeting and the test now passes.\"\n")
-    print("The CLI runs the acceptance command before accepting that claim:")
-    _show_acceptance("", cli)
-    print("\n[checkpoint] injected one generic repair request — exactly one additional response")
-    print("The workspace is unchanged, so the second check produces the same failure.")
-    print("The CLI stops with the evidence instead of looping:")
-    print("[cli] Turn ended after the repair check: FAILED — no third attempt.\n")
-
-    print("--- what happened ---")
-    print("1. The model applied a wrong fix and claimed completion.")
-    print("2. The acceptance command ran and FAILED — the CLI withheld the 'done' answer.")
-    print("3. The CLI injected exactly one additional model response.")
-    print("4. The second check still failed, so it STOPPED instead of looping.")
-
-    _show_outcome(cli)
-    assert getattr(cli.completion_policy, "repair_injections", 0) == 1, "repair must fire exactly once"
-    assert (cli.work_order or {}).get("status") == "failed", "final status must be failed"
-
-    section("1:30+ — the incomplete patch, for review")
+    section("The catch — the agent claims done, and it is wrong")
+    say("The agent makes a small mistake (it forgets a comma) and then says:")
+    _show_claim(cli, stdout_text, "Done. I fixed the greeting and the test now passes.")
+    say("")
+    say("In a normal transcript, that sentence is the end. You would trust it.")
+    say("Here, the tool runs your rule before accepting the claim. The rule fails:")
+    say("")
+    say("       $ python3 test_greet.py")
+    for line in _test_output(cli).splitlines()[:6]:
+        say(f"       {line}")
+    say("")
+    say("So the tool withholds \"done\" and gives the agent exactly one more response.")
+    say("The second attempt is still wrong. The tool stops.")
+    say("It does not loop, and it does not fake success. It leaves you the")
+    say("failure evidence and the unfinished patch to review:")
+    say("")
     async def diff() -> None:
         await cli._run_diff()
     asyncio.run(diff())
 
+    say("")
+    say("--- for the curious: the recorded outcome ---")
+    lc = (cli.work_order or {}).get("last_check") or {}
+    say(f"state: {cli.work_order.get('status')} | repair responses: "
+        f"{getattr(cli.completion_policy, 'repair_injections', '?')} | "
+        f"model requests: {cli.cache_context.requests} | changed: {lc.get('changed_files')}")
 
-def happy_path(workdir: Path, session_dir: Path, model: str, api_key: str) -> None:
-    section("0:30 — happy path: the model fixes it, and the CLI accepts it (real model)")
-    print(f"model: {model}\n")
-    cli, (_, stdout_text) = _run_engine(workdir, api_key=api_key, model=model, mock=None,
-                                        session_dir=session_dir, quiet=True)
-
-    print("The model inspects the repo, edits the return line, and runs the test itself (OK).")
-    print("Then it claims completion — and the CLI runs your command again at the boundary:\n")
-    _show_acceptance("", cli)
-
-    model_text = (stdout_text or "").strip()
-    if model_text:
-        print("\nThe model's own summary (printed only after the check passed):")
-        print("  " + " ".join(model_text.split())[:400])
-
-    section("2:20 — outcome")
-    _show_outcome(cli)
-    if (cli.work_order or {}).get("status") != "verified":
-        print("\nNOTE: the run did not end verified (model/provider behavior). That is an honest",
-              "outcome too — the demo story still holds: the command decided, not the model.")
-    async def diff() -> None:
-        await cli._run_diff("--stat")
-    asyncio.run(diff())
+    assert getattr(cli.completion_policy, "repair_injections", 0) == 1, "repair must fire once"
+    assert (cli.work_order or {}).get("status") == "failed", "final status must be failed"
 
 
-def close() -> None:
-    section("2:40 — close")
-    print('Verified means this command passed. Failed means it ran and returned failure. '
-          'Not verified means there is no trustworthy result.')
-    print("It does not mean the whole program is correct — it means the developer's chosen")
-    print("acceptance condition passed.")
+def happy_story(workdir: Path, session_dir: Path, model: str, api_key: str) -> None:
+    """When the agent is right: the same rule passes and the claim is accepted."""
+    section("When the agent is right")
+    say(f"(real model: {model})")
+    say("The same task, the same rule. This time the agent fixes it correctly,")
+    say("then claims completion. The tool runs your rule again at the boundary:")
+    say("")
+    cli, (_, stdout_text) = _run_engine(workdir, api_key=api_key, model=model,
+                                        mock=None, session_dir=session_dir)
+    lc = (cli.work_order or {}).get("last_check") or {}
+    state = str(cli.work_order.get("status") or "not_verified")
+    say(f"       rule: {lc.get('command') or acceptance_command()}")
+    say(f"       result: {state.upper()} (exit {lc.get('exit_code')})")
+    if state == "verified":
+        say(f"       changed: {lc.get('changed_files')}")
+        model_text = " ".join((stdout_text or "").split()).strip()
+        if model_text:
+            say("")
+            say("The agent's own summary (only printed after the rule passed):")
+            say(f"       {model_text[:300]}")
+    else:
+        say("")
+        say("(The run did not end verified — provider behavior. That is an honest")
+        say("outcome too: the rule decided, not the model.)")
+
+
+def close_story() -> None:
+    section("The three states")
+    say("verified     — your rule passed.")
+    say("failed       — your rule ran and failed.")
+    say("not verified — no trustworthy result (e.g. the check itself could not run).")
+    say("")
+    say("The agent never gets the last word on whether it is done. You do.")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--live", action="store_true", help="run the real-model happy path")
+    ap.add_argument("--live", action="store_true", help="add the real-model happy path")
     ap.add_argument("--model", default=DEFAULT_MODEL, help="model for --live")
     args = ap.parse_args()
 
-    workdir = make_fixture()
     session_dir = Path(tempfile.mkdtemp(prefix="demo-sessions-"))
     try:
-        section("0:00 — the product")
-        print('A terminal coding agent that will not claim work is done until a command you')
-        print('choose actually passes. The model proposes; your command disposes.')
+        section("What you are about to see")
+        say("An agent that is not allowed to say \"I'm done\" until a check YOU wrote")
+        say("passes. The agent proposes the work; the check disposes of the claim.")
 
-        run_baseline(workdir)
+        section("The setup")
+        say(f"task: {TASK}")
+        say(f"rule: before \"done\" counts, this must pass:  {acceptance_command()}")
 
-        # Failure branch needs its own clean fixture (the baseline didn't change files, but
-        # keep the story clean and deterministic).
-        failure_dir = make_fixture()
-        failure_branch(failure_dir, session_dir / "failure")
+        catch_dir = make_fixture()
+        catch_story(catch_dir, session_dir / "catch")
 
         if args.live:
             api_key = load_api_key()
@@ -298,16 +265,16 @@ def main() -> int:
             warning = preflight_model(args.model, api_key)
             if warning:
                 print(f"\n[warn] {warning}")
-                print("       You can continue anyway; the demo will report the outcome honestly.")
-            live_dir = make_fixture()
-            happy_path(live_dir, session_dir / "live", args.model, api_key)
+                print("       Continuing anyway; the demo reports the outcome honestly.")
+            happy_dir = make_fixture()
+            happy_story(happy_dir, session_dir / "happy", args.model, api_key)
         else:
-            print("\n(pass --live to run the real-model happy path; needs OPENROUTER_API_KEY)")
+            say("")
+            say("(pass --live to add the real-model happy path; needs OPENROUTER_API_KEY)")
 
-        close()
+        close_story()
         return 0
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
         shutil.rmtree(session_dir, ignore_errors=True)
 
 
