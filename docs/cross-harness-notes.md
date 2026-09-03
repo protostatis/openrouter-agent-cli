@@ -144,3 +144,22 @@ Patterns (single attempts, so read as direction, not conclusion):
    case trap) after passing it in the pre-isolation run. Repeats are needed
    before drawing conclusions about pass rates; the token/cost pattern is
    more stable.
+## Harbor-backed pi-vs-ours comparison with proxy capture (2026-09-03)
+
+Through Harbor (same task hard_crashing_script, same model
+nemotron-super, same verifier, one run each), with both harnesses routed
+through the capture proxy:
+
+| | pi | ours |
+|---|---|---|
+| Score | 1.0 | 1.0 |
+| Model calls | 6 | 8 |
+| Tools | 4 | 7 |
+| Avg request size | 8,080 bytes | 12,847 bytes |
+| Total tokens (provider-reported) | 13,284 | 27,572 |
+
+pi used about half our tokens for the same result (minimal prompt, 4 tools).
+Setup notes: pi's Harbor adapter requires `--ak model_api=openai-completions`
+to use a custom base URL (the proxy); ours routes via the adapter's
+OPENROUTER_BASE_URL injection. Proxy capture verifies both harnesses' raw
+contexts (system prompts, tool schemas, per-call usage).
