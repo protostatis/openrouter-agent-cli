@@ -82,3 +82,35 @@ Pilot budget: 2–3 elapsed weeks, 4–6 focused operator days.
 - six session logs; and
 - a dated decision document referencing the logs and the continuation
   thresholds above.
+
+## Sign-off record
+
+Signed off 2026-09-03 by the operator. The full twelve-item list was presented
+in the roadmap discussion; it is condensed here so a future reader can find
+the commitments without that context:
+
+1. The next 2–3 weeks belong to this pilot. The larger verifier experiment,
+   containerized execution, diff review, cache work, and any v0.3.0 feature
+   release are deferred until the pilot gate is decided.
+2. No version bump until the pilot gate passes.
+3. The target user is fixed: developers who want to try several OpenRouter
+   models on bounded repository tasks while keeping explicit acceptance
+   evidence.
+4. Comparison set: Aider (with OpenRouter), Claude Code, and Codex.
+5. "Narrow to an evaluation tool" is a legitimate, equal-weight outcome.
+6. Pilot results are product evidence, never experiment data; they stay out
+   of the evaluation records and frozen-run governance.
+7. Budget: 2–3 elapsed weeks, 4–6 focused operator days; release hygiene
+   capped at 2 days.
+8. Continue product investment only if all four thresholds hold: at least 2
+   of 3 users complete a genuinely useful verified task; at least 2 explain
+   the three states correctly; at least 2 return for a second task unasked;
+   and the logs name a repeated friction point.
+9. Stop building features if no user returns for a second task or every user
+   would choose an alternative without personal help.
+10. Treat demand and positioning, not features, as the problem if three
+    willing users cannot be found after about ten direct invitations and two
+    public demonstrations.
+11. Author dogfood sessions do not count toward the decision.
+12. The operator does the recruiting; the assistant drafts the invitation and
+    demonstration wording.
