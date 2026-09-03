@@ -1,0 +1,95 @@
+"""Harbor agent adapter: runs openrouter-agent-cli inside a Harbor task
+environment, in one of two configurations.
+
+- mode=unassisted (default): plain headless agent, no acceptance gate.
+- mode=policy: acceptance-gate policy — the task's user-owned acceptance
+  command must pass before "done" is accepted, with one repair response.
+
+Agent kwargs (``--ak``):
+- ``mode=<unassisted|policy>``
+- ``verify=<command>`` the acceptance command for policy mode
+
+Example:
+    harbor run --dataset my-local-dataset@1.0 \
+        --agent openrouter_agent_cli.harbor_agent:OraAgent \
+        --model openrouter/nvidia/nemotron-3-super-120b-a12b:free \
+        --ak mode=policy --ak verify="python3 ./verifiers/verify_x.py"
+"""
+from __future__ import annotations
+
+import shlex
+from typing import override
+
+from harbor.agents.installed.base import BaseInstalledAgent, CliFlag
+from harbor.agents.model_connection import ModelConnectionSpec
+from harbor.environments.base import BaseEnvironment
+from harbor.models.agent.context import AgentContext
+
+
+class OraAgent(BaseInstalledAgent):
+    """openrouter-agent-cli as a Harbor agent (unassisted or one-repair policy)."""
+
+    MODEL_CONNECTION = ModelConnectionSpec(
+        default_provider="openrouter",
+        api_key_envs=("OPENROUTER_API_KEY",),
+    )
+    CLI_FLAGS = [
+        CliFlag("mode", "ora-mode", choices=["unassisted", "policy"], default="unassisted"),
+        CliFlag("verify", "ora-verify"),
+    ]
+
+    @staticmethod
+    @override
+    def name() -> str:
+        return "ora"
+
+    @override
+    def version(self) -> str:
+        return "0.2.1"
+
+    @override
+    async def install(self, environment: BaseEnvironment) -> None:
+        await self.exec_as_agent(
+            environment,
+            command="pip install --quiet openrouter-agent-cli 2>&1 | tail -1",
+            timeout_sec=600,
+        )
+
+    @override
+    async def run(
+        self,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
+    ) -> None:
+        access = self.model_connection
+        api_key = access.api_key
+        if not api_key:
+            raise ValueError("no OPENROUTER_API_KEY for the openrouter provider")
+        model = self.model_name or "nvidia/nemotron-3-super-120b-a12b:free"
+
+        mode = self._flag_kwargs.get("mode", "unassisted")
+        verify = self._flag_kwargs.get("verify") or ""
+
+        env = {**access.env, "OPENROUTER_API_KEY": api_key}
+        escaped = shlex.quote(instruction)
+        model_q = shlex.quote(model)
+        common = (
+            f". $HOME/.local/bin/env; openrouter-agent --allow-tools "
+            f"--model {model_q} --workdir . --prompt {escaped} "
+        )
+        if mode == "policy" and verify:
+            command = (
+                f"{common}--task {escaped} "
+                f"--verify-command {shlex.quote(verify)} "
+                f"2>&1 | stdbuf -oL tee /logs/agent/ora.txt"
+            )
+        else:
+            command = f"{common}2>&1 | stdbuf -oL tee /logs/agent/ora.txt"
+        await self.exec_as_agent(
+            environment,
+            command=command,
+            env=env,
+            cwd=".",
+            timeout_sec=1200,
+        )

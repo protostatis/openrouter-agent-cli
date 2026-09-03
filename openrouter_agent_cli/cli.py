@@ -3607,6 +3607,11 @@ def main() -> int:
         help="Disable all tool calling.",
     )
     parser.add_argument(
+        "--allow-tools",
+        action="store_true",
+        help="Pre-allow every tool for this process (harness-facing; used by headless evaluation runs in disposable workspaces).",
+    )
+    parser.add_argument(
         "--system-prompt-file",
         help="Path to a custom system prompt file.",
     )
@@ -3731,6 +3736,11 @@ def main() -> int:
         # when persistent permission is really intended.
         cli._session_allow.add("discover")
         cli.policy.deny.discard("discover")
+    if getattr(args, "allow_tools", False):
+        # Harness-facing escape hatch: pre-allow every tool for headless
+        # evaluation runs (the same allow-all the eval runner uses in
+        # disposable workspaces). Normal interactive use is unchanged.
+        cli.policy = ToolPermissionPolicy(allow={"*"})
 
     if args.prompt is not None:
         cli.one_shot_prompt = args.prompt
