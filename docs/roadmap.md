@@ -37,20 +37,25 @@ default feature.
 
 ## Why this project exists
 
-None of the individual pieces are unique: Aider already supports OpenRouter,
-runs user tests, and has diff review and undo; Claude Code has checkpoints and
-lifecycle hooks; Codex has repository sessions and sandboxed execution. The
-project's potential distinction is the combination, aimed at a specific kind of
-developer:
+Positioned against today's coding agents — opencode, pi, Claude Code, Aider —
+the difference is not more models, lower cost, or more polish: those are
+already covered. The claim is narrower and specific:
 
-- model choice through OpenRouter;
-- a user-owned acceptance command as the definition of done;
-- bounded repair instead of open-ended looping;
-- explicit verified / failed / not-verified outcomes;
-- no invented cache claims; and
-- assisted evaluation results kept separate from ordinary model results.
+- completion is a checked state the developer owns (a command you control
+  decides whether completion is recorded as verified, failed, or not
+  verified), and
+- the same engine doubles as an experiment harness — contained, audited,
+  treatment-separated — so claims about whether the completion policy helps
+  are measured instead of asserted.
 
-That developer is a guess, not a fact. The current milestone tests it.
+The product is the face of the first claim; the harness is the evidence
+producing the second. Neither is durable yet: the mechanism is demonstrated by
+one 40-attempt feasibility run, and durability will come from accumulated
+reproducible campaigns and real adoption, not from claims. The pilot decides
+whether the product side earns its place; the harness's fate is decided by
+whether its measurement discipline is wanted by anyone outside this project.
+
+That developer is a guess, not a fact. The pilot milestone tests it.
 
 ## The pilot milestone (paused — see the evidence log below)
 

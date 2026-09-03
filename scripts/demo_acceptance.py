@@ -247,8 +247,11 @@ def main() -> int:
     session_dir = Path(tempfile.mkdtemp(prefix="demo-sessions-"))
     try:
         section("What you are about to see")
-        say("An agent that is not allowed to say \"I'm done\" until a check YOU wrote")
-        say("passes. The agent proposes the work; the check disposes of the claim.")
+        say("Coding agents are everywhere — opencode, pi, Claude Code. This one")
+        say("differs in one place: the agent's \"done\" is not taken at face value.")
+        say("A command you control decides whether completion is recorded as")
+        say("verified, failed, or not verified. And when we claim this matters,")
+        say("we can show the measurement, not just the demo.")
 
         section("The setup")
         say(f"task: {TASK}")

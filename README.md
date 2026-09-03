@@ -1,12 +1,17 @@
 # openrouter-agent-cli
 
-A terminal coding agent for OpenRouter models with a completion rule most
-agents don't have: **it will not claim the work is done until a command you
-choose actually passes.** Give it a bounded task and an acceptance command; it
-runs your check before accepting its own answer and reports one of three
-honest states — verified, failed, or not verified. A failing check earns exactly
-one additional model response, then it stops with the fresh evidence instead of
-looping.
+A terminal coding agent for OpenRouter models where a command you control
+determines whether completion is recorded as **verified, failed, or not
+verified**. Give it a bounded task and an acceptance command; the agent works,
+and before its answer is accepted the command runs. A failing check earns
+exactly one additional model response, then it stops with the evidence.
+
+Coding agents are everywhere — opencode, pi, Claude Code. They all run tools,
+keep sessions, and can run your tests. The difference here is not more models,
+lower cost, or more polish: completion is a checked state, recorded honestly,
+and the same engine doubles as an experiment harness — contained, audited,
+treatment-separated — so claims about whether the completion policy helps are
+measured, not asserted.
 
 It is for developers who want to try several OpenRouter models on bounded
 repository tasks while keeping explicit acceptance evidence — a command that
@@ -23,8 +28,9 @@ What it does:
 - session persistence and context visibility with honest cache accounting
   (provider cache counters are reported only when the provider exposes them);
 - diff review (`/diff`) and undo that only claims what the tool itself tracked;
-- an evaluation layer that keeps assisted results separate from ordinary model
-  performance.
+- an experiment harness on the same engine: preregistered runs, a
+  verifier-assisted policy kept separate from ordinary results, a campaign
+  audit, and contained real-model execution.
 
 ## Install
 
