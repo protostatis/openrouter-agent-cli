@@ -1,0 +1,18 @@
+[
+ {
+  "item": "widget",
+  "amount": 100.0
+ },
+ {
+  "item": "gadget",
+  "amount": 45.5
+ },
+ {
+  "item": "doohickey",
+  "amount": "12.50"
+ },
+ {
+  "item": "gizmo",
+  "amount": 87.5
+ }
+]

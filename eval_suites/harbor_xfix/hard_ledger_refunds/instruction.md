@@ -1,0 +1,2 @@
+ledger2.jsonl starts with lines giving each account's starting balance, followed by transactions in order. Rules: a 'withdraw' must be skipped entirely if it would take the account below zero (balance unchanged); a 'refund' always applies. Process transactions strictly in order and write every account's final balance to final_balances.json as a single JSON object mapping account name to integer.
+Write your result to final_balances.json in the current directory.

@@ -1,0 +1,22 @@
+version = "1.0"
+
+[task]
+name = "xfix/hard_crashing_script"
+authors = [{ name = "openrouter-agent-cli" }]
+keywords = ["terminal", "coding", "hard"]
+description = "crash fix with exact total"
+
+[verifier]
+timeout_sec = 60.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []

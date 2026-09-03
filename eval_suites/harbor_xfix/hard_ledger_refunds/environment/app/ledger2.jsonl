@@ -1,0 +1,7 @@
+{"account": "x", "balance": 80}
+{"account": "y", "balance": 60}
+{"account": "x", "type": "withdraw", "amount": 30}
+{"account": "y", "type": "refund", "amount": 20}
+{"account": "y", "type": "withdraw", "amount": 90}
+{"account": "x", "type": "withdraw", "amount": 50}
+{"account": "x", "type": "refund", "amount": 30}
