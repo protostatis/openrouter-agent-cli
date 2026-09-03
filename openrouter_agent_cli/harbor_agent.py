@@ -49,9 +49,15 @@ class OraAgent(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        # Install the CLI from git@main: the adapter + --allow-tools are on
+        # main, unreleased on PyPI yet.
         await self.exec_as_agent(
             environment,
-            command="pip install --quiet openrouter-agent-cli 2>&1 | tail -1",
+            command=(
+                "pip install --quiet "
+                "git+https://github.com/protostatis/openrouter-agent-cli@main "
+                "2>&1 | tail -1"
+            ),
             timeout_sec=600,
         )
 
@@ -66,7 +72,10 @@ class OraAgent(BaseInstalledAgent):
         api_key = access.api_key
         if not api_key:
             raise ValueError("no OPENROUTER_API_KEY for the openrouter provider")
-        model = self.model_name or "nvidia/nemotron-3-super-120b-a12b:free"
+        # Harbor passes provider-qualified names (openrouter/<id>); our CLI
+        # wants the raw OpenRouter model id.
+        raw_model = self.model_name or "nvidia/nemotron-3-super-120b-a12b:free"
+        model = raw_model.split("/", 1)[-1] if raw_model.startswith("openrouter/") else raw_model
 
         mode = self._flag_kwargs.get("mode", "unassisted")
         verify = self._flag_kwargs.get("verify") or ""
@@ -75,7 +84,7 @@ class OraAgent(BaseInstalledAgent):
         escaped = shlex.quote(instruction)
         model_q = shlex.quote(model)
         common = (
-            f". $HOME/.local/bin/env; openrouter-agent --allow-tools "
+            f"openrouter-agent --allow-tools "
             f"--model {model_q} --workdir . --prompt {escaped} "
         )
         if mode == "policy" and verify:
@@ -90,6 +99,6 @@ class OraAgent(BaseInstalledAgent):
             environment,
             command=command,
             env=env,
-            cwd=".",
+            cwd="/app",
             timeout_sec=1200,
         )

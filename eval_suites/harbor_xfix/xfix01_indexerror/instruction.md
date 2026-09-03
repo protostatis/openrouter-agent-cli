@@ -1,0 +1,1 @@
+chain.py prints number pairs. It currently prints 0 -> 1, 1 -> 2, 2 -> 3, but the correct output is 0 -> 1, 1 -> 2, 2 -> 0 (the last pair wraps around to the first). Fix chain.py so it prints the correct output. Do not modify pairs.json.
