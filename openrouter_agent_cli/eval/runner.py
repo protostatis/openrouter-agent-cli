@@ -197,11 +197,18 @@ class SuiteRunner:
             engine.policy = ToolPermissionPolicy(allow={"*"})
             engine.non_interactive_mode = True
             engine.one_shot_prompt = task.prompt
-            if getattr(self, "_sandboxed", False) and not profile.uses_mock:
+            if profile.uses_mock:
+                record["engine"]["execution_mode"] = "mock"
+            elif getattr(self, "_sandboxed", False):
                 from .sandbox import BubblewrapBashRunner
 
                 engine.bash_runner = BubblewrapBashRunner(str(workspace))
                 record["engine"]["sandbox"] = "bubblewrap"
+                record["engine"]["execution_mode"] = "bubblewrap"
+            else:
+                # Explicitly acknowledged host-mode execution (operator dev
+                # checks only; never valid experiment evidence).
+                record["engine"]["execution_mode"] = "host_acknowledged"
             if policy is not None:
                 engine.checkpoint_hook = policy
             if profile.uses_mock:
@@ -324,7 +331,10 @@ class SuiteRunner:
                 expected_task_ids=[task.id for task in self.suite.tasks],
                 expected_profile_names=[profile.name for profile in self.profiles],
                 expected_repeats=self.repeats,
-                require_containment=any(not profile.uses_mock for profile in self.profiles),
+                # Containment is required only for the mode that was actually
+                # executed: an explicitly acknowledged host-mode run is
+                # auditable as host execution, not silently rejected.
+                require_containment=self._sandboxed,
             )
         finally:
             self.cleanup_workspaces(records)

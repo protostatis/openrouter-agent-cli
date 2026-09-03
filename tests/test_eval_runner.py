@@ -298,3 +298,43 @@ def test_unknown_assisted_profile_is_rejected(tmp_path: Path, suite: Path) -> No
             None,
             assisted_profiles={"worker", "ghost"},
         )
+
+
+def test_host_mode_audit_uses_actual_containment(
+    tmp_path: Path, suite: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicitly acknowledged host-mode real run must be audited as host
+    execution (require_containment follows _sandboxed), not rejected."""
+    from openrouter_agent_cli.eval.records import make_record, new_run_id
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("AGENT_EVAL_ALLOW_HOST_EXECUTION", "1")
+    monkeypatch.setenv("AGENT_EVAL_SANDBOX", "0")
+    loaded = load_suite(suite)
+    runner = SuiteRunner(
+        loaded,
+        [Profile(name="real", prompt="P", model="m")],
+        eval_dir=tmp_path / "eval",
+    )
+    assert runner._sandboxed is False
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        "openrouter_agent_cli.eval.runner.assert_audited",
+        lambda records, **kwargs: captured.update(kwargs),
+    )
+
+    async def fake_run():
+        r = make_record(
+            run_id=new_run_id(), suite_id=loaded.suite_id,
+            task_id=loaded.tasks[0].id, cluster_id=loaded.tasks[0].cluster_id,
+            profile_name="real", profile_prompt="P", model="m",
+            transport="openrouter", workdir=str(tmp_path), scheduled_index=0,
+        )
+        r["engine"] = {"execution_mode": "host_acknowledged", "error": None}
+        r["verdict"] = "infrastructure_error"
+        return [r]
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    asyncio.run(runner.run_and_verify())
+    assert captured.get("require_containment") is False

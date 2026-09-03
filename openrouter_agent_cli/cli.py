@@ -773,9 +773,11 @@ class OpenRouterAgentCLI:
                     self._batch_allow.clear()
                     self._batch_deny.clear()
                 stored_workdir = data.get("workdir", "")
+                workdir_mismatch = False
                 if stored_workdir:
                     current_workdir = str(Path(self.workdir).resolve())
                     if stored_workdir != current_workdir:
+                        workdir_mismatch = True
                         print(
                             _strip_control_chars(
                                 f"[session] Working directory changed since last session (was {stored_workdir}, now {current_workdir}). "
@@ -800,13 +802,21 @@ class OpenRouterAgentCLI:
                         "last_check": stored_work_order.get("last_check"),
                         "updated_at": stored_work_order.get("updated_at"),
                     }
+                    if workdir_mismatch:
+                        # An acceptance result from another directory does not
+                        # apply here; never display stale verified evidence.
+                        self.work_order["status"] = "not_verified"
+                        self.work_order["last_check"] = None
                 stored_cache = data.get("cache_context")
                 if self.cache_mode != "off" and isinstance(stored_cache, dict):
+                    # Restore only cumulative observations. The pairwise
+                    # stable-prefix fields are transient (there are no stored
+                    # request hashes to back them), so they start fresh and are
+                    # recomputed on the next request instead of displaying a
+                    # stale prefix with no fingerprint.
                     for name in (
                         "requests",
                         "compactions",
-                        "stable_prefix_tokens",
-                        "stable_prefix_messages",
                         "observed_cached_tokens",
                         "provider_cache_observations",
                     ):
@@ -896,6 +906,7 @@ class OpenRouterAgentCLI:
             "exit_code": result.get("exit_code"),
             "timed_out": bool(result.get("timed_out")),
             "duration_ms": result.get("duration_ms"),
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "stdout": result.get("stdout", ""),
             "stderr": result.get("stderr", ""),
             "error": result.get("error", ""),
@@ -1563,6 +1574,7 @@ class OpenRouterAgentCLI:
                         "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
                     )
                 self._install_completion_policy()
+                self._save_session()
                 print("Acceptance check re-scoped to the new working directory (status reset to not_verified).")
             print(_strip_control_chars(f"Working directory set to: {self.workdir}"))
             print("Session-scoped permission grants cleared after cwd change.")
@@ -2980,6 +2992,34 @@ class OpenRouterAgentCLI:
             self._display_check_result(result)
             self._last_displayed_check = result
 
+    def _emit_completion_summary(self) -> None:
+        """Emit a deterministic completion notice when a repair response ended
+        with tools and there is no model final text to show.
+
+        One-shot mode promises the assistant reply on stdout; without this the
+        turn would end silently with an empty reply even after verified work.
+        The notice is CLI-generated and clearly labeled, never fabricated
+        model text, and applies only to the user acceptance policy.
+        """
+        if not isinstance(self.checkpoint_hook, UserCompletionPolicy):
+            return
+        if self.completion_policy is None:
+            return
+        result = self.completion_policy.last_result
+        if not result:
+            return
+        status = str(result.get("status") or "not_verified").upper()
+        command = str(result.get("command") or "")
+        exit_code = result.get("exit_code")
+        changed = list(result.get("changed_files") or [])
+        code = f" (exit_code={exit_code})" if exit_code is not None else ""
+        changed_text = f" Changed files: {', '.join(changed)}." if changed else ""
+        summary = (
+            f"[cli] Turn ended after the repair check: {status}: "
+            f"{command}{code}{changed_text}"
+        )
+        self._output_response(summary)
+
     async def _run_user_turn(self, client: httpx.AsyncClient, user_text: str) -> str:
         self._turn_allow.clear()
         self._turn_deny.clear()
@@ -3102,8 +3142,14 @@ class OpenRouterAgentCLI:
                         or ""
                     )
                     self.messages.append(forced_message)
-                except Exception:
-                    text = ""
+                except Exception as e:
+                    # A loop-breaker failure is still a provider failure. Do not
+                    # fabricate a normal answer: record it like the primary
+                    # request handlers and terminate without grading the turn.
+                    self._log(f"[openrouter] Loop-breaker request failed: {e}")
+                    self.terminal_status = "provider_error"
+                    self._save_session()
+                    return ""
                 if not text:
                     text = "I got stuck in a tool loop and could not make progress."
                 should_continue, result = await self._handle_final_answer(
@@ -3287,6 +3333,7 @@ class OpenRouterAgentCLI:
                     continue
                 self._display_policy_check()
                 if action == "stop" or self._checkpoint_repair_pending:
+                    self._emit_completion_summary()
                     self._save_session()
                     return ""
 
@@ -3300,6 +3347,7 @@ class OpenRouterAgentCLI:
                 )
                 self._display_policy_check()
                 self._apply_checkpoint_decision(decision)
+                self._emit_completion_summary()
                 self._save_session()
                 return ""
 
@@ -3592,6 +3640,17 @@ def main() -> int:
         asyncio.run(cli.run())
     except KeyboardInterrupt:
         pass
+
+    # One-shot mode must signal provider failures to callers instead of
+    # exiting 0 after an empty turn.
+    if args.prompt is not None and cli.terminal_status != "ok":
+        print(
+            f"[openrouter] request failed; turn ended with terminal_status="
+            f"{cli.terminal_status}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openrouter-agent-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Standalone terminal agent for OpenRouter with tool actions and context management."
 readme = "README.md"
 license = "MIT"

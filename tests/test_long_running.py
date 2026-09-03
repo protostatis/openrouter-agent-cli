@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import sys
@@ -303,3 +304,193 @@ async def test_provider_failure_sets_terminal_status(tmp_path, monkeypatch):
     async with httpx.AsyncClient() as client:
         await cli._run_user_turn(client, "hi")
     assert cli.terminal_status == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_loop_breaker_failure_is_provider_error(tmp_path, monkeypatch):
+    """A failed forced loop-breaker call must be recorded as a provider error
+    and terminate, not fabricate a normal answer."""
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    cli = OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id="loop-break-test",
+        workdir=str(tmp_path),
+        max_turns=10,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+    )
+    cli.non_interactive_mode = True
+    cli.policy = ToolPermissionPolicy(allow={"*"})
+    repeated = {"name": "run_bash", "arguments": {"command": "true"}}
+
+    class FailingLoopBreaker:
+        def __init__(self):
+            self.requests = 0
+
+        async def __call__(self, client, **kwargs):
+            self.requests += 1
+            if kwargs.get("tool_choice") == "none":
+                raise RuntimeError("loop-breaker provider failure")
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": f"tc-{self.requests}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "run_bash",
+                                        "arguments": '{"command": "true"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+
+    transport = FailingLoopBreaker()
+    cli.model_transport = transport
+    async with httpx.AsyncClient() as client:
+        result = await cli._run_user_turn(client, "do it")
+    assert result == ""
+    assert cli.terminal_status == "provider_error"
+    # The repeated tool call was nudged; the forced request failed once.
+    assert transport.requests == 3
+
+
+@pytest.mark.asyncio
+async def test_tool_repair_emits_completion_notice(
+    tmp_path, monkeypatch, capsys
+):
+    """The tool-using repair path must print a deterministic completion notice
+    so one-shot mode is not left with an empty stdout."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="Create marker.txt",
+        verify_command="test -f marker.txt",
+        responses=[
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "tmp.txt", "content": "x\n"}}
+            ]},
+            {"text": "I wrote tmp.txt, marker is next"},
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "marker.txt", "content": "ok\n"}}
+            ]},
+            {"text": "must not be requested"},
+        ],
+    )
+    async with httpx.AsyncClient() as client:
+        await engine._run_user_turn(client, "Do the work.")
+    out = capsys.readouterr().out
+    assert "Turn ended after the repair check: VERIFIED" in out
+
+
+def test_cached_prefix_is_not_restored_on_resume(tmp_path, monkeypatch):
+    """Session loading restores cumulative counters but never transient
+    stable-prefix state (there are no stored request hashes to back it)."""
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    kwargs = {
+        "api_key": "test-key",
+        "model": "test-model",
+        "workdir": str(tmp_path),
+        "max_turns": 2,
+        "max_history_messages": 60,
+        "command_timeout": 5,
+        "tools_enabled": True,
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "discovery_mode": "off",
+    }
+    first = OpenRouterAgentCLI(**kwargs, session_id="cache-resume")
+    prefix = [
+        {"role": "system", "content": "stable-system"},
+        {"role": "user", "content": "hello"},
+    ]
+    first.cache_context.observe_request(prefix)
+    first.cache_context.observe_request(prefix + [{"role": "assistant", "content": "hi"}])
+    assert first.cache_context.stable_prefix_tokens > 0
+    first._save_session()
+
+    resumed = OpenRouterAgentCLI(**kwargs, session_id="cache-resume")
+    assert resumed.cache_context.stable_prefix_tokens == 0
+    assert resumed.cache_context.stable_prefix_messages == 0
+    # Cumulative observations survive.
+    assert resumed.cache_context.requests == 2
+
+
+def test_workdir_mismatch_invalidates_acceptance(tmp_path, monkeypatch):
+    """An acceptance result from another directory must never be shown as
+    verified after resuming in a different workdir."""
+    session_dir = tmp_path / "sessions"
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    kwargs = {
+        "api_key": "test-key",
+        "model": "test-model",
+        "max_turns": 2,
+        "max_history_messages": 60,
+        "command_timeout": 5,
+        "tools_enabled": True,
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "discovery_mode": "off",
+    }
+    first = OpenRouterAgentCLI(
+        **kwargs, session_id="workdir-switch", workdir=str(tmp_path),
+        task="Task X", verify_command="pytest -q",
+    )
+    first.work_order["status"] = "verified"
+    first._save_session()
+
+    resumed = OpenRouterAgentCLI(
+        **kwargs, session_id="workdir-switch", workdir=str(other)
+    )
+    assert resumed.work_order["objective"] == "Task X"
+    assert resumed.work_order["status"] == "not_verified"
+    assert resumed.work_order["last_check"] is None
+
+
+@pytest.mark.asyncio
+async def test_cwd_change_persists_contract_reset(tmp_path, monkeypatch):
+    session_dir = tmp_path / "sessions"
+    other = tmp_path / "other-project"
+    other.mkdir()
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    cli = OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id="cwd-persist",
+        workdir=str(tmp_path),
+        max_turns=2,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+        task="Task X",
+        verify_command="pytest -q",
+    )
+    cli.work_order["status"] = "verified"
+    await cli._handle_command(None, f"/cwd {other}")
+
+    persisted = json.loads(cli._session_path.read_text())
+    assert persisted["work_order"]["status"] == "not_verified"
+    assert persisted["work_order"]["verify_command"] == "pytest -q"

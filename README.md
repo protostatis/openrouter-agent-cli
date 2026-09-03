@@ -67,11 +67,12 @@ openrouter-agent --workdir ./my-repo \
   --verify-command "pytest tests/test_auth.py"
 ```
 
-The command runs once at the completion boundary. A failing command receives at
-most one generic repair cycle; a timeout or execution error is reported as
-`not_verified` rather than treated as success. The workflow can be exercised
-without credentials or network access with `openrouter-agent-self-test` (or
-`openrouter-agent --self-test`).
+The command runs at the completion boundary (once initially, and once more
+after the single permitted repair cycle when the first check fails). A failing
+command receives at most one generic repair cycle; a timeout or execution error
+is reported as `not_verified` rather than treated as success. The workflow can
+be exercised without credentials or network access with
+`openrouter-agent-self-test` (or `openrouter-agent --self-test`).
 
 ## Useful flags
 
@@ -430,10 +431,12 @@ Evaluator artifacts:
 ## Offline evaluation workflow
 
 The repository includes a small evaluation workflow that runs the real CLI
-engine, real tool layer, and real task verifiers. The mock profile is fully
-offline: it makes no provider calls. Suite manifests and mock scripts are
-trusted operator-provided input: their commands execute on the host inside a
-disposable working directory, so review them like test code before running.
+engine, real tool layer, and real task verifiers. The mock profile is
+provider-offline: it makes no provider calls (mock-generated commands are host
+shell commands, so they are not a network guarantee). Suite manifests and mock
+scripts are trusted operator-provided input: their commands execute on the host
+inside a disposable working directory, so review them like test code before
+running.
 
 After installing the source checkout with `pip install -e .`:
 
