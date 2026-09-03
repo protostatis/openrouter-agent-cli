@@ -38,8 +38,9 @@ DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 DEFAULT_TASKS = ["xfix12_silent_case", "xfix01_indexerror", "xfix09_silent_whitespace"]
 
 
-def load_suite() -> tuple[dict, dict]:
-    data = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+def load_suite(path: str | Path | None = None) -> tuple[dict, dict]:
+    suite_path = Path(path) if path else SUITE_PATH
+    data = json.loads(suite_path.read_text(encoding="utf-8"))
     tasks = {t["id"]: t for t in data.get("tasks", [])}
     return data, tasks
 
@@ -67,12 +68,12 @@ def _load_key() -> str:
     return os.environ.get("OPENROUTER_API_KEY", "")
 
 
-def grade(task: dict, workspace: Path) -> dict:
+def grade(task: dict, workspace: Path, suite_dir: Path) -> dict:
     """Run the task's verifier against the workspace; return {verdict, detail}."""
     cmd = task["verifier"]["command"].split()
     proc = subprocess.run(
         [*cmd, str(workspace)],
-        cwd=SUITE_PATH.parent,
+        cwd=suite_dir,
         capture_output=True,
         text=True,
         timeout=int(task["verifier"].get("timeout_s", 30)) + 30,
@@ -105,7 +106,7 @@ def run_ours(task: dict, workspace: Path, model: str, api_key: str) -> dict:
         command_timeout=30,
         tools_enabled=True,
         system_prompt="You are a careful coding agent.",
-        discovery_mode="off",
+        discovery_mode="real" if "web_" in task["id"] else "off",
     )
     cli.non_interactive_mode = True
     cli.policy = ToolPermissionPolicy(allow={"*"})
@@ -117,10 +118,14 @@ def run_ours(task: dict, workspace: Path, model: str, api_key: str) -> dict:
         return cli
 
     cli = asyncio.run(go())
+    steps = [
+        f"{r['name']}:{r['status']}" for r in (cli._tool_records or {}).values()
+    ]
     return {
         "harness": "ours",
         "tool_calls": len(getattr(cli, "_tool_records", {})),
         "tokens": cli.session_tokens.get("total_tokens", 0),
+        "steps": steps,
         "terminal_status": cli.terminal_status,
     }
 
@@ -139,9 +144,11 @@ def run_opencode(task: dict, workspace: Path, model: str, api_key: str) -> dict:
         ["opencode", "run", "--model", model_spec, task["prompt"]],
         workspace,
     )
+    steps = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("→")]
     return {
         "harness": "opencode",
         "exit": rc,
+        "steps": steps,
         "output_tail": out,
         "error_tail": err,
     }
@@ -157,6 +164,7 @@ def run_pi(task: dict, workspace: Path, model: str, api_key: str) -> dict:
     return {
         "harness": "pi",
         "exit": rc,
+        "steps": [],
         "output_tail": out,
         "error_tail": err,
     }
@@ -174,9 +182,11 @@ def main() -> int:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--tasks", default=",".join(DEFAULT_TASKS))
     ap.add_argument("--all", action="store_true", help="run every suite task")
+    ap.add_argument("--suite", default=str(SUITE_PATH), help="suite JSON path")
     args = ap.parse_args()
 
-    _, tasks = load_suite()
+    _, tasks = load_suite(args.suite)
+    suite_dir = Path(args.suite).parent
     wanted = list(tasks) if args.all else [t.strip() for t in args.tasks.split(",") if t.strip()]
     missing = [t for t in wanted if t not in tasks]
     if missing:
@@ -196,7 +206,7 @@ def main() -> int:
             try:
                 extra = runner(task, ws, args.model, api_key)
                 cell.update(extra)
-                g = grade(task, ws)
+                g = grade(task, ws, suite_dir)
                 cell.update({"verdict": g["verdict"], "detail": g["detail"]})
             except Exception as exc:
                 cell.update({"verdict": "infra", "detail": f"{type(exc).__name__}: {exc}"})
@@ -204,6 +214,11 @@ def main() -> int:
                 shutil.rmtree(ws, ignore_errors=True)
             results.append(cell)
             print(f"{tid:<28} {name:<10} {cell['verdict']:<10} {cell.get('detail','')[:60]}")
+            steps = cell.get("steps")
+            if steps:
+                print(f"{'':<28} {'':<10} steps: {' -> '.join(steps)}")
+            if cell.get("tokens"):
+                print(f"{'':<28} {'':<10} tokens: {cell['tokens']}")
 
     # save for later analysis
     out_dir = PROJECT_ROOT / ".agent-eval" / "comparisons"
