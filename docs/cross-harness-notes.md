@@ -46,3 +46,40 @@ stated. The bank must be built from tasks like xfix09: a clear goal plus a
 subtle silent bug that agents miss anyway — or from tasks that need tools the
 agent must choose to use (see the unbrowser web-task family), or multi-step
 logic traps.
+
+## Raw prompts captured through the proxy (2026-09-03)
+
+Using the capture proxy (`scripts/capture_proxy.py`, in front of the
+sky-proxy or OpenRouter directly), we recorded the FULL request bodies each
+harness sends — the actual prompts loaded into the model's context. Same
+task (web_format_duration), same model
+(`nvidia/nemotron-3-super-120b-a12b:free`), all three passed.
+
+| Dimension | ours | opencode | pi |
+|---|---|---|---|
+| System prompt | "You are a careful coding agent." (minimal) | full default agent prompt + environment block + user's global AGENTS.md + MCP instructions + skills list | "expert coding assistant inside pi" + tool guidelines + skills list |
+| Verification instruction | none (verification is the external gate) | **explicit, soft**: "Run targeted tests, builds, or checks when they are relevant and feasible"; "Prefer concrete implementation and verification" | none |
+| Tool schemas per request | 7 | **66** | 4 |
+| Request size | (small; 7 tools) | **82–97 KB** per call | 7–19 KB per call |
+| Model calls for the task | 8 | 6 | 10 |
+| Verdict | pass | pass | pass |
+
+Findings:
+
+1. **opencode is the only harness with explicit verification guidance in its
+   prompt — and it is soft** ("when relevant and feasible"), which matches
+   the observed read-but-didn't-act failure on xfix09: the instruction lets
+   the model skip it.
+2. **pi has no verification instruction at all**, yet its model verified on
+   its own (it ran the examples) — verification there is pure model habit.
+   Ours has no instruction either; verification is deliberately external.
+3. **opencode's 66 tool schemas make each request ~5–10× larger than pi's or
+   ours** (82–97 KB vs 7–19 KB). That is a large fixed context cost per call
+   and a candidate policy target: a minimal tool surface.
+4. opencode also runs a separate small "title generator" call before the
+   agent calls (2.9 KB, no tools).
+
+Setup note: ours routes via `OPENROUTER_BASE_URL`; opencode via a `skycap`
+provider in `~/.config/opencode/opencode.json`; pi via a `skycap` provider in
+`~/.pi/agent/models.json`. Both point at the capture proxy (localhost:8789),
+which forwards to OpenRouter.

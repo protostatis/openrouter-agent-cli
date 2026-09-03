@@ -12,7 +12,9 @@ from typing import Any
 
 import httpx
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_URL = os.environ.get(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+) + "/chat/completions"
 
 
 def _decode_tool_arguments(raw_args: Any) -> dict[str, Any]:
