@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import json
 import os
 import shutil
@@ -71,6 +72,28 @@ def load_api_key() -> str:
     return os.environ.get("OPENROUTER_API_KEY", "")
 
 
+def preflight_model(model: str, api_key: str) -> str:
+    """One-token probe before the live happy path; returns a warning or ''."""
+    import time
+    body = {"model": model,
+            "messages": [{"role": "user", "content": "Reply with one word: ok"}],
+            "max_tokens": 1}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        t0 = time.monotonic()
+        with httpx.Client(timeout=45.0) as client:
+            resp = client.post("https://openrouter.ai/api/v1/chat/completions",
+                               json=body, headers=headers)
+        dt = time.monotonic() - t0
+        if resp.status_code != 200:
+            return f"preflight probe returned HTTP {resp.status_code}"
+        if dt > 15.0:
+            return f"preflight probe took {dt:.1f}s (slow provider); consider --model anthropic/claude-3-haiku"
+        return ""
+    except Exception as exc:
+        return f"preflight probe failed: {type(exc).__name__}: {exc}"
+
+
 def _run_engine(
     workdir: Path,
     *,
@@ -78,7 +101,8 @@ def _run_engine(
     model: str,
     mock: list[dict] | None,
     session_dir: Path,
-) -> "object":
+    quiet: bool = False,
+) -> tuple["object", tuple[str, str]]:
     from openrouter_agent_cli.cli import OpenRouterAgentCLI, ToolPermissionPolicy
     from openrouter_agent_cli.eval.transport import MockTransport
 
@@ -105,12 +129,58 @@ def _run_engine(
     if mock is not None:
         cli.model_transport = MockTransport({"responses": mock})
 
+    captured: io.StringIO | None = io.StringIO() if quiet else None
+    captured_out: io.StringIO | None = io.StringIO() if quiet else None
+    real_stderr = sys.stderr
+    real_stdout = sys.stdout
+    if captured is not None:
+        sys.stderr = captured
+        sys.stdout = captured_out
+
     async def go() -> "object":
         async with httpx.AsyncClient(timeout=90.0) as client:
             await cli.run()
         return cli
 
-    return asyncio.run(go())
+    try:
+        engine = asyncio.run(go())
+    finally:
+        if captured is not None:
+            sys.stderr = real_stderr
+            sys.stdout = real_stdout
+    captured_text = captured.getvalue() if captured is not None else ""
+    captured_stdout = captured_out.getvalue() if captured_out is not None else ""
+    return engine, (captured_text, captured_stdout)
+
+
+def _show_acceptance(prefix: str, cli: "object") -> None:
+    """Print the recorded acceptance evidence from a run, in demo form."""
+    lc = (cli.work_order or {}).get("last_check") or {}
+    status = str(lc.get("status") or "not_verified").upper()
+    command = str(lc.get("command") or "")
+    print(f"[acceptance] {status}: {command} ({lc.get('duration_ms', 0)}ms)")
+    if lc.get("exit_code") is not None:
+        print(f"[acceptance] exit_code={lc['exit_code']}")
+    changed = lc.get("changed_files") or []
+    if changed:
+        print(f"[acceptance] changed_files: {', '.join(changed)}")
+    for name in ("stdout", "stderr"):
+        value = str(lc.get(name) or "").strip()
+        if value:
+            print(f"[acceptance] {name}:")
+            print("\n".join("    " + line for line in value.splitlines()[:8]))
+    print(prefix, end="")
+
+
+def _show_outcome(cli: "object") -> None:
+    wo = cli.work_order or {}
+    lc = wo.get("last_check") or {}
+    print("\n--- honest outcome ---")
+    print(f"acceptance status : {wo.get('status')}")
+    print(f"check             : {lc.get('status')} exit={lc.get('exit_code')} {lc.get('duration_ms')}ms")
+    print(f"changed files     : {lc.get('changed_files')}")
+    print(f"repair responses  : {getattr(cli.completion_policy, 'repair_injections', '?')}")
+    print(f"model requests    : {cli.cache_context.requests}")
 
 
 def run_baseline(workdir: Path) -> None:
@@ -123,17 +193,6 @@ def run_baseline(workdir: Path) -> None:
     if proc.stderr.strip():
         print(proc.stderr.strip()[-500:])
     print("\n> The command decides the outcome. It fails now, so the work is not verified.")
-
-
-def show_outcome(cli: "object") -> None:
-    wo = cli.work_order or {}
-    lc = wo.get("last_check") or {}
-    print("\n--- honest outcome ---")
-    print(f"acceptance status : {wo.get('status')}")
-    print(f"check             : {lc.get('status')} exit={lc.get('exit_code')} {lc.get('duration_ms')}ms")
-    print(f"changed files     : {lc.get('changed_files')}")
-    print(f"repair responses  : {getattr(cli.completion_policy, 'repair_injections', '?')}")
-    print(f"model requests    : {cli.cache_context.requests}")
 
 
 def failure_branch(workdir: Path, session_dir: Path) -> None:
@@ -150,15 +209,25 @@ def failure_branch(workdir: Path, session_dir: Path) -> None:
         # Turn 2: it claims completion while the test still fails.
         {"text": "Done. I fixed the greeting and the test now passes."},
     ]
-    cli = _run_engine(workdir, api_key="mock-key", model="mock-model", mock=mock, session_dir=session_dir)
+    cli, _ = _run_engine(workdir, api_key="mock-key", model="mock-model", mock=mock,
+                         session_dir=session_dir, quiet=True)
 
-    print("\n--- what happened ---")
+    print("The model edits greet.py to  return \"Hello \" + name   (missing the comma)")
+    print("then claims:  \"Done. I fixed the greeting and the test now passes.\"\n")
+    print("The CLI runs the acceptance command before accepting that claim:")
+    _show_acceptance("", cli)
+    print("\n[checkpoint] injected one generic repair request — exactly one additional response")
+    print("The workspace is unchanged, so the second check produces the same failure.")
+    print("The CLI stops with the evidence instead of looping:")
+    print("[cli] Turn ended after the repair check: FAILED — no third attempt.\n")
+
+    print("--- what happened ---")
     print("1. The model applied a wrong fix and claimed completion.")
     print("2. The acceptance command ran and FAILED — the CLI withheld the 'done' answer.")
     print("3. The CLI injected exactly one additional model response.")
     print("4. The second check still failed, so it STOPPED instead of looping.")
 
-    show_outcome(cli)
+    _show_outcome(cli)
     assert getattr(cli.completion_policy, "repair_injections", 0) == 1, "repair must fire exactly once"
     assert (cli.work_order or {}).get("status") == "failed", "final status must be failed"
 
@@ -171,10 +240,20 @@ def failure_branch(workdir: Path, session_dir: Path) -> None:
 def happy_path(workdir: Path, session_dir: Path, model: str, api_key: str) -> None:
     section("0:30 — happy path: the model fixes it, and the CLI accepts it (real model)")
     print(f"model: {model}\n")
-    cli = _run_engine(workdir, api_key=api_key, model=model, mock=None, session_dir=session_dir)
+    cli, (_, stdout_text) = _run_engine(workdir, api_key=api_key, model=model, mock=None,
+                                        session_dir=session_dir, quiet=True)
+
+    print("The model inspects the repo, edits the return line, and runs the test itself (OK).")
+    print("Then it claims completion — and the CLI runs your command again at the boundary:\n")
+    _show_acceptance("", cli)
+
+    model_text = (stdout_text or "").strip()
+    if model_text:
+        print("\nThe model's own summary (printed only after the check passed):")
+        print("  " + " ".join(model_text.split())[:400])
 
     section("2:20 — outcome")
-    show_outcome(cli)
+    _show_outcome(cli)
     if (cli.work_order or {}).get("status") != "verified":
         print("\nNOTE: the run did not end verified (model/provider behavior). That is an honest",
               "outcome too — the demo story still holds: the command decided, not the model.")
@@ -216,6 +295,10 @@ def main() -> int:
             if not api_key:
                 print("\n--live requires OPENROUTER_API_KEY in .env or the environment.")
                 return 2
+            warning = preflight_model(args.model, api_key)
+            if warning:
+                print(f"\n[warn] {warning}")
+                print("       You can continue anyway; the demo will report the outcome honestly.")
             live_dir = make_fixture()
             happy_path(live_dir, session_dir / "live", args.model, api_key)
         else:

@@ -904,6 +904,7 @@ class OpenRouterAgentCLI:
             return
         self.work_order["status"] = str(result.get("status") or "not_verified")
         self.work_order["last_check"] = {
+            "command": str(result.get("command") or ""),
             "status": result.get("status"),
             "exit_code": result.get("exit_code"),
             "timed_out": bool(result.get("timed_out")),
