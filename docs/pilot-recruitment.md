@@ -44,7 +44,7 @@ don't have: it will not claim the work is done until a command you choose
 actually passes. You define done with an acceptance command (for example,
 `pytest tests/test_auth.py`); the tool runs it at the completion boundary and
 reports one of three honest states — verified, failed, or not verified. A
-failing check earns exactly one repair cycle, then it stops with the evidence
+failing check earns exactly one additional model response, then it stops with the evidence
 instead of looping.
 
 It also keeps cache and context claims honest: it reports provider cache

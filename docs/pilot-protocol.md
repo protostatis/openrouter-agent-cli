@@ -83,6 +83,31 @@ Pilot budget: 2–3 elapsed weeks, 4–6 focused operator days.
 - a dated decision document referencing the logs and the continuation
   thresholds above.
 
+## What to watch for in sessions
+
+From the demo review (2026-09-03). Watch for these during the observed
+sessions:
+
+1. Whether users can choose a meaningful acceptance command without coaching.
+2. Whether users understand that "verified" means "relative to the command
+   they chose," not "the whole task is correct."
+3. Whether the acceptance boundary changes an outcome or merely repeats a test
+   the users already run themselves.
+4. Whether users actually use `/diff` to review changes, and whether
+   pre-existing changes in their repository confuse them.
+5. What users do after a failed or not-verified result.
+6. Whether one additional model response (the single repair) feels sufficient
+   or arbitrarily restrictive.
+7. Whether the permission prompts and host-shell execution undermine trust.
+8. Whether model choice through OpenRouter matters enough to outweigh the
+   alternatives (Aider, Claude Code, Codex).
+9. Whether users return for a second task without being prompted.
+
+Do not over-teach participants with a persuasive demo: give standardized
+command-level onboarding, then observe. Otherwise the comprehension threshold
+measures recall of the demo rather than whether the product communicates its
+states naturally.
+
 ## Sign-off record
 
 Signed off 2026-09-03 by the operator. The full twelve-item list was presented

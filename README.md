@@ -4,8 +4,9 @@ A terminal coding agent for OpenRouter models with a completion rule most
 agents don't have: **it will not claim the work is done until a command you
 choose actually passes.** Give it a bounded task and an acceptance command; it
 runs your check before accepting its own answer and reports one of three
-honest states — verified, failed, or not verified. A failing check earns one
-repair cycle, then it stops with the evidence instead of looping.
+honest states — verified, failed, or not verified. A failing check earns exactly
+one additional model response, then it stops with the fresh evidence instead of
+looping.
 
 It is for developers who want to try several OpenRouter models on bounded
 repository tasks while keeping explicit acceptance evidence — a command that
@@ -16,7 +17,7 @@ What it does:
 - bounded task contracts (`--task` / `/task`) with a user-owned acceptance
   command (`--verify-command` / `/verify` / `/check`);
 - honest completion states: verified / failed / not verified;
-- one bounded repair cycle on a failed check, then it stops;
+- exactly one additional model response on a failed check, then it stops;
 - tool actions (`run_bash`, `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file`, `discover` web search/navigate);
 - interactive permission gating (`allow` / `deny` / `ask`);
 - session persistence and context visibility with honest cache accounting
@@ -81,10 +82,10 @@ openrouter-agent --workdir ./my-repo \
 ```
 
 The command runs at the completion boundary (once initially, and once more
-after the single permitted repair cycle when the first check fails). A failing
-command receives at most one generic repair cycle; a timeout or execution error
-is reported as `not_verified` rather than treated as success. The workflow can
-be exercised without credentials or network access with
+after the single permitted repair response when the first check fails). A
+failed command earns exactly one additional model response; a timeout or
+execution error is reported as `not_verified` rather than treated as success.
+The workflow can be exercised without credentials or network access with
 `openrouter-agent-self-test` (or `openrouter-agent --self-test`).
 
 ## Useful flags
