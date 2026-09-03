@@ -11,6 +11,16 @@
     "command": "python3 ./verifiers/verify_format_prices.py",
     "timeout_s": 30
    }
+  },
+  {
+   "id": "web_format_duration",
+   "cluster_id": "web_format_duration",
+   "prompt": "Implement duration.py in the current directory according to the specification. The specification is LINKED FROM this page (fetch the page with the discover tool, then follow the link inside it): https://raw.githubusercontent.com/protostatis/openrouter-agent-cli/0003efddd62d5f74bb77854219e398d12999bb75/eval_suites/web_tasks_v1/specs/format_duration_index.md . The hidden test checks the exact examples.",
+   "setup": [],
+   "verifier": {
+    "command": "python3 ./verifiers/verify_format_duration.py",
+    "timeout_s": 30
+   }
   }
  ]
 }
