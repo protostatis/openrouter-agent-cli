@@ -1,0 +1,16 @@
+{
+ "schema_version": "agent-eval-suite-v1",
+ "suite_id": "web-tasks-v1",
+ "tasks": [
+  {
+   "id": "web_format_prices",
+   "cluster_id": "web_format_prices",
+   "prompt": "Implement format_prices.py in the current directory according to the specification at this URL (you must fetch it with the discover tool): https://raw.githubusercontent.com/protostatis/openrouter-agent-cli/018d15b8be7eae8bb36c0191d0b48cd691abdc6d/eval_suites/web_tasks_v1/specs/format_prices_spec.md . The hidden test checks the exact examples in the specification.",
+   "setup": [],
+   "verifier": {
+    "command": "python3 ./verifiers/verify_format_prices.py",
+    "timeout_s": 30
+   }
+  }
+ ]
+}
