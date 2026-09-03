@@ -1,9 +1,9 @@
 # Pilot Protocol — Does the Product Have a User?
 
-**Status:** written 2026-09-03. This is the current milestone defined in
-`docs/roadmap.md`. It is a product test, not an evaluation experiment:
-pilot results stay out of the frozen evaluation records and are never pooled
-with experiment outcomes.
+**Status:** written and signed off 2026-09-03; **deferred** the same day by
+the operator pending a product-polish pass (see `docs/roadmap.md` evidence
+log). Not recruiting until the polish milestone passes; the commitments below
+stand unchanged.
 
 ## The decision being made
 

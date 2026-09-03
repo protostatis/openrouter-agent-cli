@@ -52,7 +52,7 @@ developer:
 
 That developer is a guess, not a fact. The current milestone tests it.
 
-## The current milestone: prove the product has a user
+## The pilot milestone (paused — see the evidence log below)
 
 **Decision being made:** continue building this as a developer product, narrow
 it to an evaluation/research tool, or put it in maintenance.
@@ -139,6 +139,34 @@ Each of these is conditional. None is promised.
 
 ## Evidence log
 
-Every time a milestone passes, fails, or is abandoned, add a dated entry here
-with the evidence and the decision. Links go here too: the pilot report, the
-feasibility findings, and this project's evaluation records and audits.
+- 2026-09-03 — pilot deferred. The operator signed the pilot protocol, then
+  chose to polish the product before recruiting. No pilot sessions have run;
+  the pilot milestone above is paused, not cancelled. The current milestone
+  is the product-polish pass described below.
+
+## Current milestone (updated 2026-09-03): polish before the pilot
+
+**Decision being made:** whether the product surface matches its own promises
+closely enough to put in front of non-author users.
+
+**What we will do (1–2 weeks):**
+
+1. Add a diff-review command (`/diff`) so the "reviewable diff" promise in the
+   product target is real, with an honest baseline and bounded output.
+2. Make undo honest: it restores only what the tool itself tracked (file-tool
+   edits and compaction); it says so and never claims to restore shell or
+   external changes.
+3. Land the three small code fixes from the advisor reviews: robust changed-
+   file parsing, eval-runner environment restoration, and assisted-profile
+   name validation up front.
+4. Polish the session surface: `/resume` reports the restored contract and
+   acceptance state; `/status` and `/usage` read cleanly.
+5. Rewrite the README opening: who this is for and the honest-completion rule,
+   not a feature inventory.
+
+**Exit criteria:** all tests pass; self-test passes; `/diff` behaves on a git
+and a non-git working directory; every product promise in
+`docs/long-running-coding-session.md` maps to a real command; README states
+the user and the completion rule in the first page.
+
+**After this passes:** resume the deferred pilot milestone above unchanged.
