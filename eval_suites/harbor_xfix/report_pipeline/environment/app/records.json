@@ -1,0 +1,10 @@
+[
+  {"id": 1, "region": "north", "product": "widget", "amount": 60, "status": "sold"},
+  {"id": 2, "region": "north", "product": "widget", "amount": 50, "status": "sold"},
+  {"id": 3, "region": "north", "product": "gadget", "amount": 20, "status": "sold"},
+  {"id": 4, "region": "south", "product": "widget", "amount": 70, "status": "sold"},
+  {"id": 5, "region": "south", "product": "gadget", "amount": 40, "status": "void"},
+  {"id": 6, "region": "east", "product": "widget", "amount": 80, "status": "sold"},
+  {"id": 7, "region": "east", "product": "gadget", "amount": 55, "status": "sold"},
+  {"id": 8, "region": "east", "product": "widget", "amount": 30, "status": "void"}
+]
