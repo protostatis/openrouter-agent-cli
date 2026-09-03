@@ -16,12 +16,42 @@ Each captured call is one JSON object per line in the log file:
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import json
 import threading
 import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def _decode_response(headers, raw: bytes) -> tuple:
+    """Return (loggable_body, usage_or_None). Handles gzip and SSE streams."""
+    encoding = (headers.get("Content-Encoding") or "").lower()
+    data = gzip.decompress(raw) if "gzip" in encoding else raw
+    usage = None
+    try:
+        return json.loads(data), None
+    except Exception:
+        pass
+    text = data.decode("utf-8", "replace")
+    if "data:" in text[:4000] and "usage" in text:
+        # SSE stream: usage lives in the final chunk.
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(payload)
+                except Exception:
+                    continue
+                if isinstance(chunk, dict) and chunk.get("usage"):
+                    usage = chunk["usage"]
+    if text.startswith("\x1f") or any(ord(c) < 8 for c in text[:32]):
+        return base64.b64encode(data).decode("ascii"), usage  # binary fallback
+    return text, usage
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,10 +87,10 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=600) as resp:
                 resp_body = resp.read()
                 entry["response_status"] = resp.status
-                try:
-                    entry["response_body"] = json.loads(resp_body)
-                except Exception:
-                    entry["response_body"] = resp_body.decode("utf-8", "replace")
+                decoded, usage = _decode_response(resp.headers, resp_body)
+                entry["response_body"] = decoded
+                if usage:
+                    entry["usage"] = usage
                 self.send_response(resp.status)
                 for name, value in resp.headers.items():
                     if name.lower() not in ("transfer-encoding", "connection", "content-length"):
@@ -71,10 +101,10 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as exc:
             resp_body = exc.read()
             entry["response_status"] = exc.code
-            try:
-                entry["response_body"] = json.loads(resp_body)
-            except Exception:
-                entry["response_body"] = resp_body.decode("utf-8", "replace")
+            decoded, usage = _decode_response(exc.headers, resp_body)
+            entry["response_body"] = decoded
+            if usage:
+                entry["usage"] = usage
             self.send_response(exc.code)
             self.send_header("Content-Length", str(len(resp_body)))
             self.send_header("Content-Type", "application/json")

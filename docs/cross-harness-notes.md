@@ -116,3 +116,31 @@ Consequences:
    isolation (Docker) would add filesystem/process isolation and version
    pinning; the Docker daemon was not running on the dev machine, so config
    isolation was used for everything that had contaminated the measurement.
+
+## Clean captured baseline with true token usage (2026-09-03)
+
+The comparison runner now routes every harness through the capture proxy and
+extracts TRUE provider-reported tokens from the captured responses (the
+capture proxy decompresses gzip bodies and parses SSE streams for the final
+chunk's usage). Isolated configs, same model, one attempt per cell (noisy —
+direction only).
+
+| Task | ours (tok/calls) | opencode (tok/calls) | pi (tok/calls) |
+|---|---|---|---|
+| xfix12 (case) | pass 14,932 / 6 | **task_fail** 18,306 / 3 | pass 13,952 / 6 |
+| xfix01 (wrap) | pass 14,435 / 6 | pass 65,430 / 7 | pass 21,120 / 9 |
+| xfix09 (whitespace) | pass 14,870 / 6 | pass 46,243 / 6 | pass 21,323 / 8 |
+| web_format_duration | pass 46,623 / 8 | pass 48,366 / 7 | pass 13,749 / 5 |
+
+Patterns (single attempts, so read as direction, not conclusion):
+
+1. **pi is consistently the cheapest** (13–21k tokens across all four tasks)
+   with its 4-tool surface and minimal prompt.
+2. **opencode is the most variable and often the most expensive** (18–65k),
+   driven by its 10-tool surface + larger system prompt.
+3. **ours sits mid-range** (14–15k on the local xfix tasks, 46k on the web
+   task — the web task needs the discover tool and more turns).
+4. Single-attempt variance is real: opencode failed xfix12 here (missed the
+   case trap) after passing it in the pre-isolation run. Repeats are needed
+   before drawing conclusions about pass rates; the token/cost pattern is
+   more stable.

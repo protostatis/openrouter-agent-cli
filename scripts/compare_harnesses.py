@@ -34,6 +34,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SUITE_PATH = PROJECT_ROOT / "eval_suites" / "coding_smoke_v1" / "suite.json"
 DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
+# Captured comparison: every harness routes through the capture proxy so the
+# full raw prompts AND true per-call token usage are recorded.
+CAPTURE_URL = "http://localhost:8789/v1"
+CAPTURE_LOG = "/tmp/capture.jsonl"
+ISOLATED_OC = "/tmp/opencode-clean/config"
+ISOLATED_PI = "/tmp/pi-clean"
+
 # The three tasks whose prompts were fixed to state their expected output.
 DEFAULT_TASKS = ["xfix12_silent_case", "xfix01_indexerror", "xfix09_silent_whitespace"]
 
@@ -88,6 +95,52 @@ def grade(task: dict, workspace: Path, suite_dir: Path) -> dict:
     return {"verdict": verdict, "detail": out[:200], "exit": proc.returncode}
 
 
+def _ensure_isolated_configs() -> None:
+    """Create the isolated opencode/pi configs if missing."""
+    if Path(ISOLATED_OC).is_dir() and Path(ISOLATED_PI).is_dir():
+        return
+    subprocess.run(
+        [str(PROJECT_ROOT / "scripts" / "isolated_harnesses.sh")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _capture_snapshot() -> int:
+    try:
+        return sum(1 for _ in open(CAPTURE_LOG))
+    except OSError:
+        return 0
+
+
+def _capture_tokens_since(start: int) -> dict:
+    """Sum provider-reported usage tokens from the capture log lines added
+    since ``start`` — TRUE token accounting for any harness routed through
+    the capture proxy."""
+    rows: list[dict] = []
+    try:
+        with open(CAPTURE_LOG) as fh:
+            for i, line in enumerate(fh):
+                if i >= start and line.strip():
+                    rows.append(json.loads(line))
+    except OSError:
+        return {"captured_calls": 0, "captured_tokens": 0, "captured_prompt": 0, "captured_completion": 0}
+    total = prompt = completion = 0
+    for r in rows:
+        body = r.get("response_body")
+        u = r.get("usage") or (body.get("usage") if isinstance(body, dict) else None) or {}
+        prompt += int(u.get("prompt_tokens", 0))
+        completion += int(u.get("completion_tokens", 0))
+        total += int(u.get("total_tokens", 0))
+    return {
+        "captured_calls": len(rows),
+        "captured_tokens": total,
+        "captured_prompt": prompt,
+        "captured_completion": completion,
+    }
+
+
 # ---------------------------------------------------------------------------
 # harness runners: each returns a small record
 # ---------------------------------------------------------------------------
@@ -130,19 +183,21 @@ def run_ours(task: dict, workspace: Path, model: str, api_key: str) -> dict:
     }
 
 
-def _shell(harness: str, cmd: list[str], workspace: Path, timeout: int = 240) -> tuple[int, str, str]:
+def _shell(harness: str, cmd: list[str], workspace: Path, timeout: int = 240, env: dict | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
-        cmd, cwd=workspace, capture_output=True, text=True, timeout=timeout
+        cmd, cwd=workspace, capture_output=True, text=True, timeout=timeout, env=env
     )
     return proc.returncode, (proc.stdout or "")[-800:], (proc.stderr or "")[-400:]
 
 
 def run_opencode(task: dict, workspace: Path, model: str, api_key: str) -> dict:
-    model_spec = f"openrouter/{model}"
+    model_spec = f"skycap/{model}"
+    env = {**os.environ, "XDG_CONFIG_HOME": ISOLATED_OC}
     rc, out, err = _shell(
         "opencode",
         ["opencode", "run", "--model", model_spec, task["prompt"]],
         workspace,
+        env=env,
     )
     steps = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("→")]
     return {
@@ -155,11 +210,12 @@ def run_opencode(task: dict, workspace: Path, model: str, api_key: str) -> dict:
 
 
 def run_pi(task: dict, workspace: Path, model: str, api_key: str) -> dict:
-    model_spec = f"openrouter/{model}"
+    env = {**os.environ, "HOME": ISOLATED_PI}
     rc, out, err = _shell(
         "pi",
-        ["pi", "-p", "--provider", "openrouter", "--model", model_spec, task["prompt"]],
+        ["pi", "-p", "--provider", "skycap", "--model", model, task["prompt"]],
         workspace,
+        env=env,
     )
     return {
         "harness": "pi",
@@ -196,6 +252,8 @@ def main() -> int:
     if not api_key:
         print("need OPENROUTER_API_KEY in .env")
         return 2
+    _ensure_isolated_configs()
+    os.environ["OPENROUTER_BASE_URL"] = CAPTURE_URL  # ours routes through capture
 
     results: list[dict] = []
     for tid in wanted:
@@ -203,6 +261,7 @@ def main() -> int:
         for name, runner in RUNNERS.items():
             ws = make_workspace(task)
             cell = {"task": tid, "harness": name, "model": args.model}
+            cap_start = _capture_snapshot()
             try:
                 extra = runner(task, ws, args.model, api_key)
                 cell.update(extra)
@@ -212,13 +271,13 @@ def main() -> int:
                 cell.update({"verdict": "infra", "detail": f"{type(exc).__name__}: {exc}"})
             finally:
                 shutil.rmtree(ws, ignore_errors=True)
+            cell.update(_capture_tokens_since(cap_start))
             results.append(cell)
-            print(f"{tid:<28} {name:<10} {cell['verdict']:<10} {cell.get('detail','')[:60]}")
+            tok = cell.get("captured_tokens")
+            print(f"{tid:<28} {name:<10} {cell['verdict']:<10} tok={tok} calls={cell.get('captured_calls')} {cell.get('detail','')[:50]}")
             steps = cell.get("steps")
             if steps:
                 print(f"{'':<28} {'':<10} steps: {' -> '.join(steps)}")
-            if cell.get("tokens"):
-                print(f"{'':<28} {'':<10} tokens: {cell['tokens']}")
 
     # save for later analysis
     out_dir = PROJECT_ROOT / ".agent-eval" / "comparisons"
