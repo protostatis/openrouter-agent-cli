@@ -83,3 +83,36 @@ Setup note: ours routes via `OPENROUTER_BASE_URL`; opencode via a `skycap`
 provider in `~/.config/opencode/opencode.json`; pi via a `skycap` provider in
 `~/.pi/agent/models.json`. Both point at the capture proxy (localhost:8789),
 which forwards to OpenRouter.
+
+## Contamination found and removed (isolated harnesses)
+
+The first capture revealed that opencode's prompt included the OPERATOR'S
+global config: the global AGENTS.md, the unchainedsky MCP server (~30 tools),
+npcterm (~17 tools), and webfetch tools — inflating opencode to 66 tool
+schemas and ~82–97 KB per request. pi included an operator skill (unbrowser).
+We were measuring the operator's configured harnesses, not the harnesses.
+
+Fix: run each harness with an isolated config directory containing ONLY the
+capture provider (`scripts/isolated_harnesses.sh` creates them):
+- opencode: `XDG_CONFIG_HOME=/tmp/opencode-clean/config opencode run ...`
+- pi: `HOME=/tmp/pi-clean pi -p ...`
+
+Isolated sizes (same web task, same model, all verified):
+
+| Dimension | ours | opencode (isolated) | pi (isolated) |
+|---|---|---|---|
+| Tool schemas | 7 | **10** | 4 |
+| Request size per call | 5–21 KB | 35–41 KB | 6–15 KB |
+| Calls for the task | 3 (12k tokens) | 5 | 6 |
+
+Before/after for opencode: 66 → 10 tools, ~97 KB → ~35 KB requests. The
+isolation also removed the operator's AGENTS.md and MCP tools from its prompt.
+
+Consequences:
+1. **opencode is still ~2–3× larger per request than pi or ours even when
+   clean** (10 tools + richer system prompt) — part of the size gap is
+   intrinsic, but the bulk of it was MCP/config contamination.
+2. The isolated baseline is the fair comparison going forward. Container
+   isolation (Docker) would add filesystem/process isolation and version
+   pinning; the Docker daemon was not running on the dev machine, so config
+   isolation was used for everything that had contaminated the measurement.
