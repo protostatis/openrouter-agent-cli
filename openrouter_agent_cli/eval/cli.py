@@ -124,6 +124,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    # Validate assisted-profile names before any file IO (suite load, dotenv),
+    # so a typo fails fast instead of after reading inputs.
+    known = {spec.partition("=")[0] for spec in args.profiles or []}
+    unknown = set(args.assisted_profile) - known
+    if unknown:
+        raise SystemExit(f"unknown --assisted-profile name(s): {sorted(unknown)}")
+
     suite = load_suite(args.suite)
     eval_dir = Path(args.eval_dir) if args.eval_dir else Path.cwd() / ".agent-eval"
     if args.report_only:

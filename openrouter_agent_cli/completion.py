@@ -101,28 +101,36 @@ class UserCompletionPolicy:
         return result
 
     async def _changed_files(self) -> list[str]:
-        """Return a bounded git worktree list for the developer-facing result."""
-        try:
-            raw = await run_bash(
-                "git status --short --untracked-files=all",
-                self.workdir,
-                30,
-                structured=True,
-            )
-            payload = json.loads(raw)
-            if not isinstance(payload, dict) or payload.get("exit_code") != 0:
-                return []
-            files: list[str] = []
-            for line in str(payload.get("stdout") or "").splitlines():
-                if len(line) > 3:
-                    path = line[3:].strip()
-                    if " -> " in path:
-                        path = path.rsplit(" -> ", 1)[-1]
-                    if path:
-                        files.append(path)
-            return files[:100]
-        except Exception:
-            return []
+        """Return a bounded git worktree list for the developer-facing result.
+
+        Uses NUL-delimited name-only output (rename-safe, no short-status
+        parsing) and degrades gracefully for repositories without commits or
+        for non-git directories.
+        """
+        files: list[str] = []
+        for command in (
+            "git diff --name-only -z HEAD",
+            "git ls-files --others --exclude-standard -z",
+        ):
+            try:
+                raw = await run_bash(command, self.workdir, 30, structured=True)
+                payload = json.loads(raw)
+                if not isinstance(payload, dict) or payload.get("exit_code") != 0:
+                    continue
+                files.extend(
+                    path
+                    for path in str(payload.get("stdout") or "").split("\0")
+                    if path
+                )
+            except Exception:
+                continue
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for path in files:
+            if path not in seen:
+                seen.add(path)
+                deduped.append(path)
+        return deduped[:100]
 
     def _decide(self, result: dict[str, Any]) -> CheckpointDecision:
         from .cli import CheckpointDecision

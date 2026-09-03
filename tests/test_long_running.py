@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -494,3 +495,81 @@ async def test_cwd_change_persists_contract_reset(tmp_path, monkeypatch):
     persisted = json.loads(cli._session_path.read_text())
     assert persisted["work_order"]["status"] == "not_verified"
     assert persisted["work_order"]["verify_command"] == "pytest -q"
+
+
+def _git_repo(tmp_path, monkeypatch, session_id="diff-test") -> Path:
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "sessions"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "a.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+    return repo
+
+
+def _plain_cli(tmp_path, workdir, session_id="diff-test") -> OpenRouterAgentCLI:
+    return OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id=session_id,
+        workdir=str(workdir),
+        max_turns=2,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+    )
+
+
+@pytest.mark.asyncio
+async def test_diff_shows_tracked_and_untracked(tmp_path, monkeypatch, capsys):
+    repo = _git_repo(tmp_path, monkeypatch)
+    (repo / "a.txt").write_text("two\n", encoding="utf-8")
+    (repo / "new.txt").write_text("new\n", encoding="utf-8")
+
+    cli = _plain_cli(tmp_path, repo)
+    await cli._run_diff()
+    out = capsys.readouterr().out
+    assert "-one" in out and "+two" in out
+    assert "new.txt" in out  # untracked files listed separately
+
+
+@pytest.mark.asyncio
+async def test_diff_stat_and_path_filter(tmp_path, monkeypatch, capsys):
+    repo = _git_repo(tmp_path, monkeypatch)
+    (repo / "a.txt").write_text("two\n", encoding="utf-8")
+    (repo / "b.txt").write_text("new\n", encoding="utf-8")
+
+    cli = _plain_cli(tmp_path, repo)
+    await cli._run_diff("--stat")
+    out = capsys.readouterr().out
+    assert "1 file changed" in out
+
+    await cli._run_diff("a.txt")
+    out = capsys.readouterr().out
+    assert "-one" in out and "+two" in out
+    assert "b.txt" not in out.split("Untracked files")[0]
+
+
+@pytest.mark.asyncio
+async def test_diff_non_git_directory_is_honest(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "sessions"))
+    cli = _plain_cli(tmp_path, tmp_path)
+    await cli._run_diff()
+    out = capsys.readouterr().out
+    assert "not inside a git repository" in out
+    assert "/export" in out
+
+
+@pytest.mark.asyncio
+async def test_changed_files_handles_renames_with_spaces(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path, monkeypatch, session_id="rename-test")
+    (repo / "a.txt").rename(repo / "renamed file.txt")
+
+    policy = UserCompletionPolicy(command="true", workdir=str(repo))
+    changed = await policy._changed_files()
+    assert "renamed file.txt" in changed

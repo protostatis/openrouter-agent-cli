@@ -338,3 +338,39 @@ def test_host_mode_audit_uses_actual_containment(
     monkeypatch.setattr(runner, "run", fake_run)
     asyncio.run(runner.run_and_verify())
     assert captured.get("require_containment") is False
+
+
+def test_runner_restores_environment_after_attempt(
+    tmp_path: Path, suite: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Library-caller hygiene: run-scoped env vars return to their previous
+    values after a run instead of leaking."""
+    import os
+
+    monkeypatch.setenv("AGENT_EVAL_DIR", "sentinel")
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", "sentinel")
+    loaded = load_suite(suite)
+    runner = SuiteRunner(
+        loaded,
+        [Profile(name="worker", prompt="P", mock_script=dict(_MOCK_DOES_WORK))],
+        eval_dir=tmp_path / "eval",
+    )
+    asyncio.run(runner.run())
+    assert os.environ.get("AGENT_EVAL_DIR") == "sentinel"
+    assert os.environ.get("OPENROUTER_AGENT_SESSION_DIR") == "sentinel"
+
+
+def test_assisted_profile_validated_before_suite_load() -> None:
+    """A typo in --assisted-profile must fail before any suite or profile file
+    is read, so the error names the typo, not a missing input."""
+    from openrouter_agent_cli.eval import cli as eval_cli
+
+    with pytest.raises(SystemExit) as exc:
+        eval_cli.main(
+            [
+                "--suite", "/nonexistent/suite.json",
+                "--profile", "worker=some/path.json",
+                "--assisted-profile", "ghost",
+            ]
+        )
+    assert "unknown --assisted-profile" in str(exc.value)

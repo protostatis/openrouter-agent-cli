@@ -147,6 +147,10 @@ class SuiteRunner:
     async def _run_attempt(
         self, task: Task, profile: Profile, index: int
     ) -> dict[str, Any]:
+        # Library-caller hygiene: restore these after the attempt instead of
+        # leaking run-scoped values into the caller's environment.
+        prev_agent_eval_dir = os.environ.get("AGENT_EVAL_DIR")
+        prev_session_env = os.environ.get(_ENGINE_SESSION_ENV)
         os.environ.setdefault("AGENT_EVAL_DIR", str(self.eval_dir))
         os.environ[_ENGINE_SESSION_ENV] = str(self.eval_dir / "sessions")
         workspace = make_fresh_workspace(
@@ -258,6 +262,14 @@ class SuiteRunner:
                 if engine is not None:
                     policy.finish_engine(engine.session_tokens["total_tokens"])
                 record["policy"] = policy.snapshot()
+            if prev_agent_eval_dir is None:
+                os.environ.pop("AGENT_EVAL_DIR", None)
+            else:
+                os.environ["AGENT_EVAL_DIR"] = prev_agent_eval_dir
+            if prev_session_env is None:
+                os.environ.pop(_ENGINE_SESSION_ENV, None)
+            else:
+                os.environ[_ENGINE_SESSION_ENV] = prev_session_env
         append_record(self.runs_path, record)
         return record
 

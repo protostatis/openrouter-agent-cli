@@ -11,6 +11,7 @@ import inspect
 import json
 import os
 import re
+import shlex
 import tempfile
 import sys
 import time
@@ -123,6 +124,7 @@ SLASH_COMMANDS = [
     "/task",
     "/verify",
     "/check",
+    "/diff",
     "/context",
     "/compact",
     "/undo",
@@ -1172,9 +1174,10 @@ class OpenRouterAgentCLI:
             print("  /task [description]   Show or set the current coding task")
             print("  /verify [command]     Show or set the acceptance command (or 'off')")
             print("  /check                Run the acceptance command now")
+            print("  /diff [path]          Show working-tree changes for review (or --stat)")
             print("  /context [n]          Show last n messages (default 8)")
             print("  /compact [--preview]  Force conversation compaction or preview it")
-            print("  /undo                 Undo last compaction or last file write/edit")
+            print("  /undo                 Undo last file-tool edit or compaction (shell changes are never rolled back)")
             print("  /clear                Clear session history (same id)")
             print("  /tools                Show tools + permission policy")
             print("  /tools on|off         Enable or disable tool calling")
@@ -1279,6 +1282,10 @@ class OpenRouterAgentCLI:
             self._save_session()
             return True
 
+        if cmd == "/diff":
+            await self._run_diff(arg)
+            return True
+
         if cmd == "/context":
             n = 8
             if arg:
@@ -1310,15 +1317,23 @@ class OpenRouterAgentCLI:
         if cmd == "/undo":
             if self._last_file_backup is not None:
                 restored = self._undo_last_file_change()
+                if restored.startswith("Restored"):
+                    restored += (
+                        " (undo covers only file-tool edits and compaction; "
+                        "shell commands are never rolled back)"
+                    )
                 print(restored)
                 return True
             if self._last_compaction_backup is None:
-                print("Nothing to undo.")
+                print(
+                    "Nothing tracked to undo. Undo covers only file-tool edits "
+                    "and compaction; shell commands cannot be rolled back."
+                )
                 return True
             self.messages = copy.deepcopy(self._last_compaction_backup)
             self._last_compaction_backup = None
             self._save_session()
-            print("Last compaction undone.")
+            print("Last compaction undone (undo covers only file-tool edits and compaction).")
             return True
 
         if cmd == "/clear":
@@ -1522,6 +1537,15 @@ class OpenRouterAgentCLI:
             # session's policy forward.
             self._install_completion_policy()
             print(f"Resumed session: {self.session_id}")
+            if self.work_order is not None:
+                print(
+                    f"  task:        {self.work_order.get('objective') or '(none)'}"
+                )
+                print(
+                    f"  acceptance:  {self.work_order.get('status') or 'not configured'}"
+                )
+                if self.work_order.get("verify_command"):
+                    print(f"  verify:      {self.work_order['verify_command']}")
             return True
 
         if cmd == "/export":
@@ -2991,6 +3015,81 @@ class OpenRouterAgentCLI:
         if result is not None and result != self._last_displayed_check:
             self._display_check_result(result)
             self._last_displayed_check = result
+
+    async def _run_diff(self, arg: str = "") -> None:
+        """Show the session's working-tree changes for developer review.
+
+        Diff baseline is the last commit (``HEAD``), falling back to the index
+        comparison in a repository with no commits yet. Untracked files are
+        listed separately because ``git diff`` never shows them. Output is
+        bounded; non-git directories get an honest message instead of a guess.
+        """
+        arg = arg.strip()
+        stat_only = arg == "--stat"
+        path_filter = "" if stat_only else arg
+
+        check = json.loads(
+            await run_bash(
+                "git rev-parse --is-inside-work-tree",
+                self.workdir,
+                15,
+                structured=True,
+            )
+        )
+        inside_git = (
+            isinstance(check, dict)
+            and check.get("exit_code") == 0
+            and str(check.get("stdout") or "").strip() == "true"
+        )
+        if not inside_git:
+            print(
+                "Diff unavailable: this working directory is not inside a git "
+                "repository. Use /export for the session transcript."
+            )
+            return
+
+        if stat_only:
+            diff_cmd = "git diff HEAD --stat"
+        elif path_filter:
+            diff_cmd = shlex.join(["git", "diff", "HEAD", "--", path_filter])
+        else:
+            diff_cmd = "git diff HEAD"
+        payload = json.loads(
+            await run_bash(diff_cmd, self.workdir, 30, structured=True)
+        )
+        if not isinstance(payload, dict):
+            print("Diff unavailable: git produced no readable result.")
+            return
+        if payload.get("exit_code") != 0:
+            # Fresh repository with no HEAD: compare against the empty index.
+            fallback = "git diff --stat" if stat_only else "git diff"
+            payload = json.loads(
+                await run_bash(fallback, self.workdir, 30, structured=True)
+            )
+        stdout = str(payload.get("stdout") or "").rstrip()
+        if payload.get("truncated"):
+            stdout += "\n[output truncated]"
+        print(stdout if stdout else "No tracked changes to show.")
+
+        untracked = json.loads(
+            await run_bash(
+                "git ls-files --others --exclude-standard",
+                self.workdir,
+                15,
+                structured=True,
+            )
+        )
+        if isinstance(untracked, dict) and untracked.get("exit_code") == 0:
+            names = [
+                line.strip()
+                for line in str(untracked.get("stdout") or "").splitlines()
+                if line.strip()
+            ]
+            if names:
+                preview = ", ".join(names[:20])
+                if len(names) > 20:
+                    preview += f" (+{len(names) - 20} more)"
+                print(f"Untracked files (not shown in the diff): {preview}")
 
     def _emit_completion_summary(self) -> None:
         """Emit a deterministic completion notice when a repair response ended

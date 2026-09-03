@@ -1,16 +1,29 @@
 # openrouter-agent-cli
 
-Standalone terminal agent for OpenRouter models with:
-- tool actions (`run_bash`, `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file`, `discover` web search/navigate)
-- interactive permission gating (`allow` / `deny` / `ask`)
-- session persistence
-- explicit coding task contracts with optional acceptance checks
-- context visibility and compaction
-- honest `verified` / `failed` / `not_verified` completion states
-- cache-aware context accounting without invented provider cache claims
-- concurrent `discover` batching (parallel tool calls → `max_concurrency`)
-- lifecycle status, scoped approvals, safe terminal rendering, and tool inspection
-- Markdown-rendered assistant replies and multi-line paste support in the scrollback REPL
+A terminal coding agent for OpenRouter models with a completion rule most
+agents don't have: **it will not claim the work is done until a command you
+choose actually passes.** Give it a bounded task and an acceptance command; it
+runs your check before accepting its own answer and reports one of three
+honest states — verified, failed, or not verified. A failing check earns one
+repair cycle, then it stops with the evidence instead of looping.
+
+It is for developers who want to try several OpenRouter models on bounded
+repository tasks while keeping explicit acceptance evidence — a command that
+must pass before the agent's answer is accepted.
+
+What it does:
+
+- bounded task contracts (`--task` / `/task`) with a user-owned acceptance
+  command (`--verify-command` / `/verify` / `/check`);
+- honest completion states: verified / failed / not verified;
+- one bounded repair cycle on a failed check, then it stops;
+- tool actions (`run_bash`, `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file`, `discover` web search/navigate);
+- interactive permission gating (`allow` / `deny` / `ask`);
+- session persistence and context visibility with honest cache accounting
+  (provider cache counters are reported only when the provider exposes them);
+- diff review (`/diff`) and undo that only claims what the tool itself tracked;
+- an evaluation layer that keeps assisted results separate from ordinary model
+  performance.
 
 ## Install
 
@@ -118,9 +131,10 @@ openrouter-agent --debug  # timestamps + idle instrumentation on stderr
 - `/task [description]`
 - `/verify [command]` (use `off` to clear it)
 - `/check` (run the acceptance command immediately)
+- `/diff [path]` (review working-tree changes; `--stat` for a summary)
 - `/context [n]`
 - `/compact [--preview]`
-- `/undo` (last compaction or last file write/edit)
+- `/undo` (last file-tool edit or compaction — shell changes are never rolled back)
 - `/clear` (same id)
 - `/tools`
 - `/tools on|off`
