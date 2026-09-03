@@ -1,8 +1,19 @@
 # Public Release Checklist
 
-Use this before changing repository visibility to public.
+## Every release (repeatable — run this each time)
 
-## Secrets and credentials
+- [ ] version bumped in `pyproject.toml`; `uv.lock` matches
+- [ ] `uv run pytest -q` passes
+- [ ] `uv run openrouter-agent --self-test` passes
+- [ ] existing evaluation records still audit: `uv run openrouter-agent-eval-audit --records <last campaign file>`
+- [ ] `uv build` produces both wheel and sdist; new modules present in the wheel
+- [ ] `git diff --check` clean; no secrets in the diff
+- [ ] commit, tag `v<N>`, push tag, and `gh release create v<N>` with plain-language notes
+- [ ] publish to PyPI (GitHub Actions trusted publishing once registered, otherwise the local token path)
+
+## First public release (one-time — already done for v0.1.6)
+
+### Secrets and credentials
 
 - [ ] confirm `.env` is not tracked (`git ls-files .env` should return nothing)
 - [ ] rotate any previously exposed keys
