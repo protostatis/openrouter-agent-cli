@@ -5,10 +5,24 @@ the options. Read this when deciding what to build next.
 
 ## The one-line conclusion
 
-The next milestone is to find out whether anyone besides the author will use
-this tool for real work. Everything else we considered — containerized
-execution, diff review, a bigger experiment — assumes there is a user, and we
-have no evidence of that yet.
+The end goal is a harness that generates candidate policies, measures each
+against real tasks with experiment integrity, and keeps only the ones that
+substantially improve what coding agents produce. The CLI is the first
+artifact under study; the harness is the durable asset.
+
+## The end goal (stated 2026-09-03)
+
+A harness that generates policies — interventions at defined points in the
+coding-agent loop (completion checks, prompt overlays, tool rules, model
+choice) — and validates each one with experiment-grade integrity: contained
+execution, treatment-separated records, campaign audit, adequate power,
+preregistered selection rules. "Substantially improves" means clearing a
+pre-committed bar for effect size, regression ceiling, and cost ceiling on a
+hard task bank — never a vibes-based claim.
+
+The current milestone below is the first step toward that goal. The pilot
+remains on the path but is re-scoped: it validates the harness's worth with
+evaluation-conscious users, and the CLI's fate is a secondary question.
 
 ## Where we are now
 
@@ -144,34 +158,62 @@ Each of these is conditional. None is promised.
 
 ## Evidence log
 
+- 2026-09-03 — end goal stated: a harness that generates policies that
+  substantially improve coding-agent output (see the section above). The
+  product-polish pass (below) was completed the same day.
 - 2026-09-03 — pilot deferred. The operator signed the pilot protocol, then
   chose to polish the product before recruiting. No pilot sessions have run;
-  the pilot milestone above is paused, not cancelled. The current milestone
-  is the product-polish pass described below.
+  the pilot milestone below is paused, not cancelled. With the end goal
+  stated, the pilot is re-scoped toward evaluation-conscious users; its
+  pre-committed thresholds stand unless the operator changes them.
 
-## Current milestone (updated 2026-09-03): polish before the pilot
+## Current milestone: prove one policy substantially improves agent output
+
+**Decision being made:** whether the harness can produce a policy whose
+effect on coding-agent output clears a preregistered, powered bar — the first
+real step toward the end goal.
+
+**What we will do (the near-term plan):**
+
+1. Define the policy space (`docs/policy-space.md`): the intervention points
+   and the first candidate policies (the acceptance gate, the discipline and
+   recovery prompt overlays, tool-discipline rules, model choice), plus the
+   preregistered selection rule for "substantial."
+2. Build a hard task bank: tasks where unassisted agents fail around 40–50%,
+   so a good policy has room to show a real effect.
+3. Run a power analysis, then preregister the first multi-policy campaign
+   (fingerprints, budgets, thresholds) per the experiment-contract pattern.
+4. Clear the Linux keep-awake gate in parallel — the critical dependency for
+   real-model campaigns at scale.
+5. Run the campaign, audit it, and write the decision doc.
+
+**Exit criteria:** at least one policy clears the preregistered bar
+(effect at/above a pre-committed threshold, regressions within the ceiling,
+cost within the ceiling) on an adequately powered, audited campaign; the
+result is reported with the same separation discipline as every other
+measurement.
+
+## Completed milestone: product polish (done 2026-09-03)
 
 **Decision being made:** whether the product surface matches its own promises
 closely enough to put in front of non-author users.
 
-**What we will do (1–2 weeks):**
+**What was done (1–2 weeks):**
 
-1. Add a diff-review command (`/diff`) so the "reviewable diff" promise in the
-   product target is real, with an honest baseline and bounded output.
-2. Make undo honest: it restores only what the tool itself tracked (file-tool
+1. Added a diff-review command (`/diff`) so the "reviewable diff" promise in
+   the product target is real, with an honest baseline and bounded output.
+2. Made undo honest: it restores only what the tool itself tracked (file-tool
    edits and compaction); it says so and never claims to restore shell or
    external changes.
-3. Land the three small code fixes from the advisor reviews: robust changed-
+3. Landed the three small code fixes from the advisor reviews: robust changed-
    file parsing, eval-runner environment restoration, and assisted-profile
    name validation up front.
-4. Polish the session surface: `/resume` reports the restored contract and
+4. Polished the session surface: `/resume` reports the restored contract and
    acceptance state; `/status` and `/usage` read cleanly.
-5. Rewrite the README opening: who this is for and the honest-completion rule,
+5. Rewrote the README opening: who this is for and the honest-completion rule,
    not a feature inventory.
 
-**Exit criteria:** all tests pass; self-test passes; `/diff` behaves on a git
-and a non-git working directory; every product promise in
+**Exit criteria (met):** 142 tests pass; self-test passes; `/diff` behaves on
+a git and a non-git working directory; every product promise in
 `docs/long-running-coding-session.md` maps to a real command; README states
 the user and the completion rule in the first page.
-
-**After this passes:** resume the deferred pilot milestone above unchanged.
