@@ -85,6 +85,45 @@ async def test_acceptance_policy_marks_passing_check_verified(tmp_path):
     assert policy.last_result["status"] == "verified"
 
 
+@pytest.mark.asyncio
+async def test_acceptance_policy_checks_turn_limit_and_repairs(tmp_path, monkeypatch):
+    """A policy-enabled run can rescue work left unfinished at the turn limit."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="Create marker.txt",
+        verify_command="test -f marker.txt",
+        responses=[
+            {
+                "tool_calls": [
+                    {
+                        "name": "write_file",
+                        "arguments": {"path": "partial.txt", "content": "x\n"},
+                    }
+                ]
+            },
+            {
+                "tool_calls": [
+                    {
+                        "name": "write_file",
+                        "arguments": {"path": "marker.txt", "content": "ok\n"},
+                    }
+                ]
+            },
+        ],
+    )
+    engine.max_turns = 1
+
+    async with httpx.AsyncClient() as client:
+        result = await engine._run_user_turn(client, "Do the work.")
+
+    assert result == ""
+    assert (Path(engine.workdir) / "marker.txt").is_file()
+    assert engine.completion_policy.last_result["status"] == "verified"
+    assert engine.completion_policy.repair_injections == 1
+    assert len(engine.model_transport.requests) == 2
+
+
 def test_work_order_persists_across_resume(tmp_path, monkeypatch):
     session_dir = tmp_path / "sessions"
     monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))

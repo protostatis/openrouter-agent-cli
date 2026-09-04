@@ -2,7 +2,9 @@
 
 This is intentionally separate from the hidden evaluation policy. A developer
 may opt in with an explicit check command; the command's output is shown to the
-developer, while the model receives only a generic repair instruction.
+developer, while the model receives only a generic repair instruction. The
+check runs at a final-answer boundary and once more when a policy-enabled turn
+reaches its iteration limit without producing a final answer.
 """
 from __future__ import annotations
 
@@ -148,7 +150,7 @@ class UserCompletionPolicy:
     async def __call__(self, event: RuntimeCheckpoint) -> CheckpointDecision:
         from .cli import CheckpointDecision
 
-        if event.kind == "final_answer":
+        if event.kind in {"final_answer", "turn_limit"}:
             return self._decide(await self.check())
         if event.kind == "mutating_batch" and self.repair_injections > 0:
             # The repair response used mutating tools and the work has now

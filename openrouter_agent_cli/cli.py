@@ -474,7 +474,7 @@ class RuntimeCheckpoint:
     """
 
     sequence: int
-    kind: str  # final_answer | mutating_batch
+    kind: str  # final_answer | mutating_batch | turn_limit
     turn: int
     tool_names: tuple[str, ...]
     observed_at: float
@@ -3452,6 +3452,28 @@ class OpenRouterAgentCLI:
                 return ""
 
             turn += 1
+            # A policy-enabled run that exhausts its normal budget has not
+            # emitted a final answer, but it may still have left a
+            # nearly-complete workspace behind. Give the user-owned acceptance
+            # policy one explicit boundary here. A failed check receives the
+            # same single repair response as a failed final-answer check;
+            # unassisted runs retain the old behavior and stop at the limit.
+            if turn >= turn_limit and isinstance(
+                self.checkpoint_hook, UserCompletionPolicy
+            ):
+                decision = await self._run_checkpoint(
+                    kind="turn_limit",
+                    turn=turn,
+                    tool_names=mutating_tool_names,
+                )
+                self._display_policy_check()
+                action = self._apply_checkpoint_decision(decision)
+                if action == "repair":
+                    turn_limit += 1
+                    continue
+                self._emit_completion_summary()
+                self._save_session()
+                return ""
         self._log("[agent] Reached max turns for this user message.")
         self._save_session()
         return ""
