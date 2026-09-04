@@ -17,6 +17,7 @@ Example:
 """
 from __future__ import annotations
 
+import os
 import shlex
 from typing import override
 
@@ -81,6 +82,13 @@ class OraAgent(BaseInstalledAgent):
         verify = self._flag_kwargs.get("verify") or ""
 
         env = {**access.env, "OPENROUTER_API_KEY": api_key}
+        # Route the CLI's OpenRouter traffic through the capture proxy when
+        # the host sets OPENROUTER_BASE_URL (containers reach the host via
+        # host.docker.internal). Harbor's own connection resolution does not
+        # always pass this through to the agent env.
+        env["OPENROUTER_BASE_URL"] = os.environ.get(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        )
         escaped = shlex.quote(instruction)
         model_q = shlex.quote(model)
         common = (

@@ -185,3 +185,35 @@ cost: on 6-8 step tasks both pass at ~100%; on the ~15-20 step task ours
 fails ~2/3 of runs. Hypothesis this feeds: our acceptance-gate policy (must
 run before done, one repair) is aimed exactly at the break-without-verify
 failure mode — the campaign should test whether the gate rescues these runs.
+
+## Acceptance gate on report_pipeline (exploratory, 2026-09-04)
+
+The same task and model were then run three times with our one-repair
+acceptance gate enabled. The fixed-grader results were:
+
+| | unassisted | acceptance gate |
+|---|---:|---:|
+| Passes | 1/3 (33%) | 1/3 (33%) |
+| Model calls (3 runs) | 72 | 63 |
+| Total provider tokens (3 runs) | 616,956 | 443,036 |
+| Median tokens per run | 208,818 | 158,642 |
+
+This is **not evidence that the gate rescued a failure**. No repair injection
+occurred in these three runs:
+
+- Run 1 reached the 24-turn limit before producing a final answer; the
+  acceptance boundary was never reached.
+- Run 2 manually ran the acceptance command, saw it fail, and then spent the
+  remaining turns rewriting `formatter.py`; it reached the 24-turn limit
+  without a final answer, so the gate again had no chance to inject its one
+  repair request.
+- Run 3 fixed both files, ran the acceptance command successfully, and the
+  gate verified the final answer without needing a repair.
+
+The lower token total is therefore confounded by earlier stopping and must
+not be treated as a policy cost advantage. The current result is a null
+comparison (same 1/3 pass rate) plus a design finding: a final-answer-only
+gate cannot rescue agents that exhaust the turn budget while editing. A
+follow-up must either reserve a completion boundary or test a higher, equally
+fixed turn budget for both arms; that follow-up must remain exploratory until
+the budget is pinned before results are collected.
