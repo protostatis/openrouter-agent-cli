@@ -246,3 +246,29 @@ The current conclusion remains: the acceptance gate has not yet rescued a
 failed real-model attempt. The next design test must reserve a completion
 boundary at the turn limit (or otherwise force a final-answer checkpoint),
 then compare that behavior with the existing final-answer-only gate.
+
+## Turn-limit checkpoint trial (exploratory, 2026-09-04)
+
+The CLI then added a turn-limit checkpoint. When a policy-enabled run reaches
+its normal budget after a tool batch, it runs the user-owned acceptance check;
+if the check fails, the existing one-repair allowance is used. Unassisted
+runs are unchanged. The full local test suite passed (143 tests).
+
+Three Harbor policy attempts used the same task, model, and 32-turn budget:
+
+| Attempt | Reward | Checkpoint behavior |
+|---|---:|---|
+| 1 | 0.0 | Failed at the limit; one repair only re-ran the broken report; failed again |
+| 2 | 0.0 | Failed at the limit; one repair edit failed; failed again |
+| 3 | 1.0 | Fixed the task before the limit; final check passed; no repair needed |
+
+The mechanism now fires in real runs, but it rescued **0/2** failed attempts
+on this task. This task has three related bugs and the model reached the
+limit with too little ability left for one generic repair message to repair
+the remaining state. The honest conclusion is narrower than "the policy does
+not work": the current one-repair, turn-limit intervention is insufficient
+for this complex task.
+
+Provider capture recorded 52 model calls and 453,358 tokens across these
+three policy attempts. The first two attempts ended early after the repair
+cycle, so this is not a cost comparison with the unassisted arm.
