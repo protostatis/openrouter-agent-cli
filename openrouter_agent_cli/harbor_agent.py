@@ -8,6 +8,7 @@ environment, in one of two configurations.
 Agent kwargs (``--ak``):
 - ``mode=<unassisted|policy>``
 - ``verify=<command>`` the acceptance command for policy mode
+- ``max_turns=<int>`` optional model/tool iteration budget per task
 
 Example:
     harbor run --dataset my-local-dataset@1.0 \
@@ -37,6 +38,7 @@ class OraAgent(BaseInstalledAgent):
     CLI_FLAGS = [
         CliFlag("mode", "ora-mode", choices=["unassisted", "policy"], default="unassisted"),
         CliFlag("verify", "ora-verify"),
+        CliFlag("max_turns", "ora-max-turns"),
     ]
 
     @staticmethod
@@ -80,6 +82,7 @@ class OraAgent(BaseInstalledAgent):
 
         mode = self._flag_kwargs.get("mode", "unassisted")
         verify = self._flag_kwargs.get("verify") or ""
+        max_turns = self._flag_kwargs.get("max_turns")
 
         env = {**access.env, "OPENROUTER_API_KEY": api_key}
         # Route the CLI's OpenRouter traffic through the capture proxy when
@@ -95,6 +98,8 @@ class OraAgent(BaseInstalledAgent):
             f"openrouter-agent --allow-tools "
             f"--model {model_q} --workdir . --prompt {escaped} "
         )
+        if max_turns is not None and str(max_turns).strip():
+            common += f"--max-turns {shlex.quote(str(max_turns))} "
         if mode == "policy" and verify:
             command = (
                 f"{common}--task {escaped} "

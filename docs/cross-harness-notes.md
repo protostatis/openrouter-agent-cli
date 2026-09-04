@@ -217,3 +217,32 @@ gate cannot rescue agents that exhaust the turn budget while editing. A
 follow-up must either reserve a completion boundary or test a higher, equally
 fixed turn budget for both arms; that follow-up must remain exploratory until
 the budget is pinned before results are collected.
+
+## Higher-budget policy follow-up (exploratory, 2026-09-04)
+
+The adapter was extended to pass an explicit `max_turns` value, then both
+arms received the same 32-turn budget. Three attempts were run per arm:
+
+| | unassisted | acceptance gate |
+|---|---:|---:|
+| Raw rewards | 1, 0, 1 | 0, 1, 1 |
+| Completed task trials | 3 | 2 |
+| Task passes among completed trials | 2/3 (67%) | 2/2 (100%) |
+
+The policy arm's first zero was an Nvidia provider overload at turn 4 and
+did not reach the grader; it is an infrastructure error, not a task failure.
+The two completed policy trials passed without a repair injection. The
+unassisted failed trial reached turn 32 after producing a literal `\\n` in
+the report and repeatedly rewriting `formatter.py`; it never produced a
+final answer. The policy arm therefore still did not test the proposed rescue
+mechanism.
+
+Provider capture recorded 90 model calls and 1,019,363 tokens for the three
+unassisted attempts, versus 38 calls and 213,605 tokens for the policy
+attempts. These totals are not a valid cost comparison because the policy
+arm contains an early provider error and two shorter successful runs.
+
+The current conclusion remains: the acceptance gate has not yet rescued a
+failed real-model attempt. The next design test must reserve a completion
+boundary at the turn limit (or otherwise force a final-answer checkpoint),
+then compare that behavior with the existing final-answer-only gate.
