@@ -163,3 +163,25 @@ Setup notes: pi's Harbor adapter requires `--ak model_api=openai-completions`
 to use a custom base URL (the proxy); ours routes via the adapter's
 OPENROUTER_BASE_URL injection. Proxy capture verifies both harnesses' raw
 contexts (system prompts, tool schemas, per-call usage).
+
+## First cross-harness discriminator: report_pipeline (2026-09-03)
+
+The longer-horizon 7-file task (3 coordinated cross-file bugs), same model,
+same verifier, 3 runs each through Harbor:
+
+| | ours | pi |
+|---|---|---|
+| Pass rate | **1/3 (33%)** | **3/3 (100%)** |
+| Model calls (3 runs) | 72 | 53 |
+| Total tokens (3 runs) | **616,956** | 198,664 |
+
+pi both passes more AND uses ~3x fewer tokens. Our failure mode (from run
+logs): the agent reads all files, edits multiple, breaks the syntax in one
+edit, and does not re-run to catch the breakage. pi's loop maintains
+verification discipline on the longer task.
+
+This is the first task where the harness difference is decisive, not just
+cost: on 6-8 step tasks both pass at ~100%; on the ~15-20 step task ours
+fails ~2/3 of runs. Hypothesis this feeds: our acceptance-gate policy (must
+run before done, one repair) is aimed exactly at the break-without-verify
+failure mode — the campaign should test whether the gate rescues these runs.
