@@ -809,7 +809,10 @@ class TestEntryPoints:
     def test_short_alias_entry_point_matches_main_command(self):
         """`ora` must stay wired to the same main() as `openrouter-agent`,
         so the short install alias can never drift into a different program."""
-        tomllib = pytest.importorskip("tomllib")
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10 has no tomllib
+            tomllib = pytest.importorskip("tomli")
         root = Path(__file__).resolve().parents[1]
         data = tomllib.loads((root / "pyproject.toml").read_text())
         scripts = data["project"]["scripts"]

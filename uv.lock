@@ -1052,6 +1052,7 @@ viz = [
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.metadata]
@@ -1075,6 +1076,7 @@ provides-extras = ["unbrowser", "viz", "full"]
 dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
 ]
 
 [[package]]

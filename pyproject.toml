@@ -45,6 +45,8 @@ openrouter-agent-self-test = "openrouter_agent_cli.selftest:main"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # Python 3.10 has no stdlib tomllib; the entry-point test falls back to it.
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [tool.pytest.ini_options]
