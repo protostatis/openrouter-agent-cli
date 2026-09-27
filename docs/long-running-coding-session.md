@@ -39,9 +39,12 @@ The same contract can be configured during an interactive session:
 `/verify off` remove the corresponding contract. Resuming the session restores
 the task, the last acceptance state, and the cache observations.
 
-When the check fails, the session gives the agent exactly one additional model
-response. If that response's check still fails, the session stops with the
-failure evidence for the developer instead of looping indefinitely.
+When the check fails, the session gives the agent a short repair round:
+read-only inspection replies may continue for up to two more responses, so a
+model that inspects before editing still gets to act on what it saw. Any
+changing tool or final reply triggers the check again, and at the bound the
+session runs the check one last time and stops with that fresh evidence for
+the developer instead of looping indefinitely.
 
 ## KV-cache-aware behavior
 

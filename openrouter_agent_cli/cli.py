@@ -526,6 +526,22 @@ def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
     return max(1, chars // 4)
 
 
+def _describe_exception(exc: BaseException) -> str:
+    """A single-line cause for a failed request that never goes blank.
+
+    ``str(exc)`` is empty for common transport failures (for example
+    ``TimeoutError()``), and a bare ``Request failed:`` line leaves the
+    developer unable to tell a timeout from an outage. Workbench
+    classification keys on the ``Request failed`` prefix, so the caller
+    keeps that prefix unchanged and this only fills in the cause.
+    """
+    detail = str(exc).strip()
+    name = type(exc).__name__
+    if detail:
+        return f"{name}: {detail}"
+    return f"{name} (no detail; often a timeout or connection drop)"
+
+
 @dataclass
 class ToolPermissionPolicy:
     allow: set[str] = field(default_factory=set)
@@ -569,6 +585,14 @@ _GENERIC_REPAIR_MESSAGE = (
     "The trusted completion check did not pass. Inspect your changes and tests, "
     "make any necessary repairs, and reply when the task is complete."
 )
+
+# User-acceptance repair: how many all-read-only model responses may follow an
+# injected repair before the turn stops with fresh evidence. Read-only responses
+# inspect; they do not repair, so a one-response budget would kill any model
+# that inspects before editing (the common inspect-then-edit pattern). Mutating
+# responses and final answers are bounded elsewhere (their checkpoints stop the
+# turn), so this bound only covers pure inspection rounds.
+REPAIR_READ_ONLY_ROUNDS = 2
 
 # Required-change guard: after this many consecutive model turns with no
 # repository content change, inject one nudge; a further unchanged final
@@ -674,6 +698,9 @@ class OpenRouterAgentCLI:
         self._checkpoint_sequence = 0
         self._checkpoint_repair_count = 0
         self._checkpoint_repair_pending = False
+        # Read-only responses seen since the current repair injection
+        # (see REPAIR_READ_ONLY_ROUNDS).
+        self._repair_read_only_rounds = 0
         self._last_compaction_backup: list[dict[str, Any]] | None = None
         self._last_file_backup: dict[str, Any] | None = None
         self.one_shot_prompt: str | None = None
@@ -840,6 +867,29 @@ class OpenRouterAgentCLI:
         print("Runtime status:")
         for line in self._status_lines():
             print(_strip_control_chars(f"  {line}"))
+
+    def _startup_hints(self) -> list[str]:
+        """Plain-language reminders printed under the startup status block.
+
+        The top banner lines scroll away on terminals that cannot restore the
+        cursor position, so anything a developer must not miss (an old session
+        was resumed, a task is loaded but has not begun) is repeated here,
+        right above the first prompt.
+        """
+        hints: list[str] = []
+        prior = [m for m in self.messages if m.get("role") != "system"]
+        if self._resumed and prior:
+            hints.append(
+                f"[session] Resumed session '{self.session_id}' with "
+                f"{len(prior)} existing message(s); /new starts a fresh session."
+            )
+        objective = str((self.work_order or {}).get("objective") or "")
+        if objective and not any(m.get("role") == "assistant" for m in prior):
+            hints.append(
+                '[task] Task attached but not started — send any message '
+                '(e.g. "go") to begin.'
+            )
+        return hints
 
     def _output_response(self, text: str) -> str:
         safe_text = _strip_control_chars(text)
@@ -1202,6 +1252,8 @@ class OpenRouterAgentCLI:
             self._clear_terminal()
             self._print_startup_banner()
             self._print_status()
+            for hint in self._startup_hints():
+                print(_strip_control_chars(hint))
             print("Type /help for commands. Ctrl-C clears input; Ctrl-D exits.")
             print()
 
@@ -2876,6 +2928,7 @@ class OpenRouterAgentCLI:
         args: dict[str, Any],
         *,
         isolated_discovery: bool = False,
+        approval_clock: dict[str, int] | None = None,
     ) -> str:
         if not self.tools_enabled:
             return f"Tool blocked: tools are disabled. Requested '{tool_name}'."
@@ -2891,7 +2944,12 @@ class OpenRouterAgentCLI:
         if decision == "deny":
             return f"Tool blocked by deny policy: {tool_name}"
         if decision == "ask":
+            approval_started = time.monotonic()
             allowed = await self._confirm_tool_call(tool_name, args)
+            if approval_clock is not None:
+                approval_clock["ms"] = round(
+                    (time.monotonic() - approval_started) * 1000
+                )
             if not allowed:
                 return f"Tool call denied by user: {tool_name}"
 
@@ -3069,6 +3127,19 @@ class OpenRouterAgentCLI:
             f"\n[tool result truncated at {MAX_TOOL_RESULT_CHARS} characters]"
         )
 
+    @staticmethod
+    def _elapsed_duration_ms(
+        started: float, approval_clock: dict[str, int]
+    ) -> int:
+        """Execution time minus the pause where a human answered a prompt.
+
+        Without this, a millisecond file edit shows as tens of seconds in the
+        [tool-result] line because the developer sat on the permission prompt
+        before answering.
+        """
+        elapsed = round((time.monotonic() - started) * 1000)
+        return max(0, elapsed - int(approval_clock.get("ms", 0)))
+
     async def _run_tool_call(
         self,
         tool_name: str,
@@ -3078,6 +3149,7 @@ class OpenRouterAgentCLI:
         isolated_discovery: bool = False,
     ) -> str:
         started = time.monotonic()
+        approval_clock: dict[str, int] = {}
         record = {
             "id": tool_call_id,
             "name": tool_name,
@@ -3085,6 +3157,7 @@ class OpenRouterAgentCLI:
             "status": "queued",
             "result": "",
             "duration_ms": 0,
+            "approval_wait_ms": 0,
         }
         self._tool_records[tool_call_id] = record
         self._set_activity("running tool", f"{tool_call_id} {tool_name}")
@@ -3097,16 +3170,21 @@ class OpenRouterAgentCLI:
                 tool_name,
                 args,
                 isolated_discovery=isolated_discovery,
+                approval_clock=approval_clock,
             )
         except asyncio.CancelledError:
             record["status"] = "cancelled"
-            record["duration_ms"] = round((time.monotonic() - started) * 1000)
+            record["approval_wait_ms"] = approval_clock.get("ms", 0)
+            record["duration_ms"] = self._elapsed_duration_ms(
+                started, approval_clock
+            )
             record["result"] = "Tool call cancelled by user."
             raise
         except Exception as e:
             result = f"Tool error ({tool_name}): {e}"
 
-        record["duration_ms"] = round((time.monotonic() - started) * 1000)
+        record["approval_wait_ms"] = approval_clock.get("ms", 0)
+        record["duration_ms"] = self._elapsed_duration_ms(started, approval_clock)
         record["result"] = result
         status = "succeeded"
         lowered = result.lower()
@@ -3189,6 +3267,7 @@ class OpenRouterAgentCLI:
             return "stop"
         self._checkpoint_repair_count += 1
         self._checkpoint_repair_pending = True
+        self._repair_read_only_rounds = 0
         self.messages.append(
             {
                 "role": "user",
@@ -3348,6 +3427,7 @@ class OpenRouterAgentCLI:
         self._checkpoint_sequence = 0
         self._checkpoint_repair_count = 0
         self._checkpoint_repair_pending = False
+        self._repair_read_only_rounds = 0
         self.terminal_status = "ok"
         if self.completion_policy is not None:
             self.completion_policy.begin_turn()
@@ -3419,7 +3499,12 @@ class OpenRouterAgentCLI:
                 self._save_session()
                 return ""
             except Exception as e:
-                self._log(f"[openrouter] Request failed: {e}")
+                self._log(f"[openrouter] Request failed: {_describe_exception(e)}")
+                if not self.non_interactive_mode:
+                    self._log(
+                        "[openrouter] Your message is saved; "
+                        "type /retry to try again."
+                    )
                 self.terminal_status = "provider_error"
                 self._last_failed_prompt = user_text
                 self._save_session()
@@ -3528,8 +3613,17 @@ class OpenRouterAgentCLI:
                     # A loop-breaker failure is still a provider failure. Do not
                     # fabricate a normal answer: record it like the primary
                     # request handlers and terminate without grading the turn.
-                    self._log(f"[openrouter] Loop-breaker request failed: {e}")
+                    self._log(
+                        f"[openrouter] Loop-breaker request failed: "
+                        f"{_describe_exception(e)}"
+                    )
+                    if not self.non_interactive_mode:
+                        self._log(
+                            "[openrouter] Your message is saved; "
+                            "type /retry to try again."
+                        )
                     self.terminal_status = "provider_error"
+                    self._last_failed_prompt = user_text
                     self._save_session()
                     return ""
                 if not text:
@@ -3719,11 +3813,24 @@ class OpenRouterAgentCLI:
                     self._save_session()
                     return ""
 
-            # A repair request grants exactly one additional model response.
-            # If that response used only read-only tools (no mutating-batch
-            # checkpoint fires), run the acceptance check once more at this
-            # boundary so the turn stops with fresh evidence, not silently.
+            # A repair request grants a short repair sequence: read-only
+            # responses (list/read/search) may continue up to
+            # REPAIR_READ_ONLY_ROUNDS times so an inspect-then-edit model can
+            # act on what it learned; mutating batches and final answers stop
+            # the turn at their own checkpoints (with the check re-run). At the
+            # bound, re-run the acceptance check once more and stop with that
+            # fresh evidence instead of ending silently. Evaluation hooks keep
+            # the original single-response behavior.
             if self._checkpoint_repair_pending:
+                if (
+                    isinstance(self.checkpoint_hook, UserCompletionPolicy)
+                    and self._repair_read_only_rounds < REPAIR_READ_ONLY_ROUNDS
+                ):
+                    if turn + 1 >= turn_limit:
+                        turn_limit += 1
+                    self._repair_read_only_rounds += 1
+                    turn += 1
+                    continue
                 decision = await self._run_checkpoint(
                     kind="final_answer", turn=turn + 1
                 )

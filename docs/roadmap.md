@@ -35,7 +35,8 @@ The released tool (v0.2.1 on PyPI) is a terminal agent that lets a developer:
 - have that command run before the agent's answer is accepted;
 - see one of three honest outcomes: the command passed (verified), the command
   ran and failed (failed), or no trustworthy result exists (not verified);
-- get exactly one additional model response when the first check fails; and
+- get a short, bounded repair round when the first check fails (inspect,
+  change, check again); and
 - see context and cache information only when the provider actually reports it.
 
 It also ships an evaluation harness, which is arguably the more unusual asset:

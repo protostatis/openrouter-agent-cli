@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
@@ -143,6 +144,90 @@ async def test_acceptance_policy_checks_turn_limit_and_repairs(tmp_path, monkeyp
     assert len(engine.model_transport.requests) == 2
 
 
+def _git(workdir: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=workdir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_changed_files_excludes_python_bytecode(tmp_path):
+    """__pycache__ noise in a fresh repository must not be listed as changed
+    files: only source changes prove real work, and bytecode artifacts make
+    every session look like it changed something."""
+    _git(tmp_path, "init")
+    (tmp_path / "app.py").write_text("print('hi')\n")
+    _git(tmp_path, "add", "app.py")
+    _git(
+        tmp_path,
+        "-c", "user.email=t@example.com",
+        "-c", "user.name=t",
+        "commit", "-m", "init",
+    )
+    # Source edit + a new source file + bytecode artifacts.
+    (tmp_path / "app.py").write_text("print('bye')\n")
+    (tmp_path / "helper.py").write_text("x = 1\n")
+    pycache = tmp_path / "__pycache__"
+    pycache.mkdir()
+    (pycache / "app.cpython-314.pyc").write_bytes(b"\x00")
+    (tmp_path / "loose.pyc").write_bytes(b"\x00")
+
+    policy = UserCompletionPolicy(command="true", workdir=str(tmp_path))
+    changed = await policy._changed_files()
+
+    assert set(changed) == {"app.py", "helper.py"}
+    assert not any(path.endswith((".pyc", ".pyo")) for path in changed)
+    assert not any("__pycache__" in path for path in changed)
+
+
+def test_generated_path_filter():
+    from openrouter_agent_cli.completion import _is_generated_path
+
+    assert _is_generated_path("__pycache__/app.cpython-314.pyc")
+    assert _is_generated_path("pkg/__pycache__/mod.cpython-314.pyc")
+    assert _is_generated_path("app.pyc")
+    assert _is_generated_path("app.pyo")
+    assert not _is_generated_path("app.py")
+    assert not _is_generated_path("src/cache.py")
+
+
+@pytest.mark.asyncio
+async def test_approval_wait_is_not_counted_as_tool_runtime(
+    tmp_path, monkeypatch
+):
+    """The time a developer spends reading the permission prompt must not be
+    reported as tool execution time — a millisecond file edit used to show as
+    tens of seconds in the [tool-result] line."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="List the directory",
+        verify_command="true",
+        responses=[{"text": "done"}],
+    )
+    monkeypatch.setattr(
+        engine, "_effective_policy_decision", lambda name: "ask"
+    )
+
+    async def slow_confirm(tool_name, args):
+        await asyncio.sleep(0.15)
+        return True
+
+    monkeypatch.setattr(engine, "_confirm_tool_call", slow_confirm)
+    await engine._run_tool_call("list_dir", {"path": "."}, "tc-approval")
+
+    record = engine._tool_records["tc-approval"]
+    assert record["status"] == "succeeded"
+    assert record["approval_wait_ms"] >= 100
+    # Duration covers execution only; the approval pause is excluded.
+    assert record["duration_ms"] < 100
+    assert record["duration_ms"] < record["approval_wait_ms"]
+
+
 def test_work_order_persists_across_resume(tmp_path, monkeypatch):
     session_dir = tmp_path / "sessions"
     monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
@@ -164,6 +249,50 @@ def test_work_order_persists_across_resume(tmp_path, monkeypatch):
     assert resumed.work_order["objective"] == "Fix the login test"
     assert resumed.work_order["verify_command"] == "pytest -q"
     assert "Fix the login test" in resumed._work_order_message("continue")
+
+
+def test_startup_hints_flag_resumed_sessions_and_unstarted_tasks(
+    tmp_path, monkeypatch
+):
+    """Resuming an old session and loading a task without starting it must
+    both be stated plainly under the startup status, where the lines stay
+    visible even when the top banner scrolls away."""
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    kwargs = {
+        "api_key": "test-key",
+        "model": "test-model",
+        "session_id": "hints-session",
+        "workdir": str(tmp_path),
+        "max_turns": 2,
+        "max_history_messages": 60,
+        "command_timeout": 5,
+        "tools_enabled": True,
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "discovery_mode": "off",
+    }
+
+    # Fresh run with a task: only the not-yet-started hint.
+    fresh = OpenRouterAgentCLI(**kwargs, task="Do the thing")
+    fresh_hints = fresh._startup_hints()
+    assert any("Task attached but not started" in h for h in fresh_hints)
+    assert not any("Resumed session" in h for h in fresh_hints)
+
+    # Resumed before any assistant reply: both hints.
+    fresh.messages.append({"role": "user", "content": "hello"})
+    fresh._save_session()
+    resumed = OpenRouterAgentCLI(**kwargs)
+    resumed_hints = resumed._startup_hints()
+    assert any("Resumed session" in h for h in resumed_hints)
+    assert any("Task attached but not started" in h for h in resumed_hints)
+
+    # Resumed mid-work: the resume hint only, never the not-started hint.
+    fresh.messages.append({"role": "assistant", "content": "working on it"})
+    fresh._save_session()
+    resumed_mid = OpenRouterAgentCLI(**kwargs)
+    mid_hints = resumed_mid._startup_hints()
+    assert any("Resumed session" in h for h in mid_hints)
+    assert not any("Task attached but not started" in h for h in mid_hints)
 
 
 def _engine_with_task(
@@ -230,11 +359,13 @@ async def test_tool_using_repair_is_reverified(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_read_only_repair_response_is_reverified(tmp_path, monkeypatch):
-    """A repair response using only read-only tools still re-runs the
-    acceptance check before the turn stops. A read-only repair cannot change
-    the workspace, so the second check honestly reports failed and the turn
-    ends with that evidence instead of silently."""
+async def test_read_only_repair_rounds_allow_inspect_then_edit(
+    tmp_path, monkeypatch
+):
+    """A repair response that only inspected files may continue, so an
+    inspect-then-edit model gets to act on what it learned: the read-only
+    reply is followed by a real edit, the check passes, and the turn ends
+    verified instead of stopping at the inspection."""
     engine = _engine_with_task(
         tmp_path,
         monkeypatch,
@@ -247,6 +378,10 @@ async def test_read_only_repair_response_is_reverified(tmp_path, monkeypatch):
             ]},
             {"text": "checking the workspace"},
             {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "marker.txt", "content": "ok\n"}}
+            ]},
             {"text": "must not be requested"},
         ],
     )
@@ -254,11 +389,53 @@ async def test_read_only_repair_response_is_reverified(tmp_path, monkeypatch):
         result = await engine._run_user_turn(client, "Do the work.")
 
     assert result == ""
-    # The second acceptance check ran at the read-only boundary (and failed,
-    # because a read-only repair could not create marker.txt).
+    assert engine.work_order["status"] == "verified"
+    assert (Path(engine.workdir) / "marker.txt").is_file()
+    assert engine.completion_policy.last_result["status"] == "verified"
+    # write + final-answer + read-only round + marker write; the 5th scripted
+    # response must not be consumed.
+    assert len(engine.model_transport.requests) == 4
+
+
+@pytest.mark.asyncio
+async def test_read_only_repair_rounds_are_bounded(
+    tmp_path, monkeypatch, capsys
+):
+    """Read-only inspection during a repair is bounded: after the allowed
+    rounds the turn re-runs the acceptance check once and stops with that
+    fresh evidence instead of looping on pure reads."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="Create marker.txt",
+        verify_command="test -f marker.txt",
+        responses=[
+            {"tool_calls": [
+                {"name": "write_file",
+                 "arguments": {"path": "tmp.txt", "content": "x\n"}}
+            ]},
+            {"text": "checking the workspace"},
+            {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "tmp.txt"}}]},
+            {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"text": "must not be requested"},
+        ],
+    )
+    async with httpx.AsyncClient() as client:
+        result = await engine._run_user_turn(client, "Do the work.")
+
+    assert result == ""
+    # write, final-answer, two allowed read-only rounds, then one more
+    # read-only reply that trips the bound and ends the turn; the 6th
+    # scripted response must not be consumed.
+    assert len(engine.model_transport.requests) == 5
     assert engine.completion_policy.last_result["status"] == "failed"
     assert engine.work_order["status"] == "failed"
-    assert len(engine.model_transport.requests) == 3
+    captured = capsys.readouterr()
+    assert (
+        "[cli] Turn ended after the repair check: FAILED"
+        in captured.out + captured.err
+    )
 
 
 @pytest.mark.asyncio
@@ -337,7 +514,7 @@ async def test_cwd_rescopes_the_acceptance_contract(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_sets_terminal_status(tmp_path, monkeypatch):
+async def test_provider_failure_sets_terminal_status(tmp_path, monkeypatch, capsys):
     session_dir = tmp_path / "sessions"
     monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
     cli = OpenRouterAgentCLI(
@@ -363,6 +540,85 @@ async def test_provider_failure_sets_terminal_status(tmp_path, monkeypatch):
     async with httpx.AsyncClient() as client:
         await cli._run_user_turn(client, "hi")
     assert cli.terminal_status == "provider_error"
+    # The failure line names the error, not just "Request failed:".
+    captured = capsys.readouterr()
+    assert (
+        "[openrouter] Request failed: RuntimeError: provider unreachable"
+        in captured.err + captured.out
+    )
+    # Non-interactive runs do not print the interactive /retry hint.
+    assert "/retry" not in captured.err + captured.out
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_with_empty_message_still_says_why(
+    tmp_path, monkeypatch, capsys
+):
+    """Transport failures like TimeoutError() stringify to an empty message;
+    the failure line must still name the error type instead of ending at a
+    bare colon."""
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    cli = OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id="provider-timeout-test",
+        workdir=str(tmp_path),
+        max_turns=2,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+    )
+    cli.non_interactive_mode = True
+    cli.policy = ToolPermissionPolicy(allow={"*"})
+
+    class TimeoutTransport:
+        async def __call__(self, client, **kwargs):
+            raise TimeoutError()
+
+    cli.model_transport = TimeoutTransport()
+    async with httpx.AsyncClient() as client:
+        await cli._run_user_turn(client, "hi")
+    assert cli.terminal_status == "provider_error"
+    captured = capsys.readouterr()
+    failure_line = captured.err + captured.out
+    assert "[openrouter] Request failed: TimeoutError" in failure_line
+    assert "no detail" in failure_line
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_hint_offered_interactively(
+    tmp_path, monkeypatch, capsys
+):
+    """Interactive runs are told how to resume the failed request."""
+    session_dir = tmp_path / "sessions"
+    monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
+    cli = OpenRouterAgentCLI(
+        api_key="test-key",
+        model="test-model",
+        session_id="provider-interactive-test",
+        workdir=str(tmp_path),
+        max_turns=2,
+        max_history_messages=60,
+        command_timeout=5,
+        tools_enabled=True,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        discovery_mode="off",
+    )
+    cli.policy = ToolPermissionPolicy(allow={"*"})
+
+    class BoomTransport:
+        async def __call__(self, client, **kwargs):
+            raise RuntimeError("provider unreachable")
+
+    cli.model_transport = BoomTransport()
+    async with httpx.AsyncClient() as client:
+        await cli._run_user_turn(client, "hi")
+    captured = capsys.readouterr()
+    assert "type /retry to try again" in captured.err + captured.out
+    assert cli._last_failed_prompt == "hi"
 
 
 @pytest.mark.asyncio
@@ -428,6 +684,8 @@ async def test_loop_breaker_failure_is_provider_error(tmp_path, monkeypatch):
         result = await cli._run_user_turn(client, "do it")
     assert result == ""
     assert cli.terminal_status == "provider_error"
+    # A loop-breaker failure stays retryable like any other provider failure.
+    assert cli._last_failed_prompt == "do it"
     # The repeated tool call was nudged; the forced request failed once.
     assert transport.requests == 3
 
