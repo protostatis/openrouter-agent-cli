@@ -4,7 +4,9 @@ A terminal coding agent for OpenRouter models where a command you control
 determines whether completion is recorded as **verified, failed, or not
 verified**. Give it a bounded task and an acceptance command; the agent works,
 and before its answer is accepted the command runs. A failing check earns
-exactly one additional model response, then it stops with the evidence.
+a short repair round — the agent may inspect its work for a couple more
+responses, any actual change triggers the check again — and the turn then
+stops with the evidence.
 
 Coding agents are everywhere — opencode, pi, Claude Code. They all run tools,
 keep sessions, and can run your tests. The difference here is not more models,
@@ -22,7 +24,8 @@ What it does:
 - bounded task contracts (`--task` / `/task`) with a user-owned acceptance
   command (`--verify-command` / `/verify` / `/check`);
 - honest completion states: verified / failed / not verified;
-- exactly one additional model response on a failed check, then it stops;
+- a short, bounded repair round after a failed check (a couple of
+  inspection responses, then the check again), after which it stops;
 - tool actions (`run_bash`, `list_dir`/`search_text`/`read_file`/`write_file`/`edit_file`, `discover` web search/navigate);
 - interactive permission gating (`allow` / `deny` / `ask`);
 - session persistence and context visibility with honest cache accounting
@@ -87,10 +90,12 @@ openrouter-agent --workdir ./my-repo \
   --verify-command "pytest tests/test_auth.py"
 ```
 
-The command runs at the completion boundary (once initially, and once more
-after the single permitted repair response when the first check fails). A
-failed command earns exactly one additional model response; a timeout or
-execution error is reported as `not_verified` rather than treated as success.
+The command runs at the completion boundary (once initially, and again after
+the repair round when the first check fails). A failed command earns a short
+repair round: the agent may inspect files for up to two more responses, any
+changing tool triggers the check again, and the turn stops with that fresh
+evidence. A timeout or execution error is reported as `not_verified` rather
+than treated as success.
 The workflow can be exercised without credentials or network access with
 `openrouter-agent-self-test` (or `openrouter-agent --self-test`).
 
@@ -137,7 +142,9 @@ how long one provider request may wait, `--provider-retries` controls retries
 after retryable provider errors, and `--repeat-tool-call-limit` controls how
 many identical tool batches are tolerated before the loop-break nudge.
 Acceptance checking remains separate and is enabled with `--verify-command`;
-it still allows only one repair response.
+a failed check earns a short, bounded repair round (up to two inspection
+responses; any changing tool runs the check again), then the turn stops with
+the evidence.
 
 For internal repository work, the bounded workbench creates one Git worktree
 per task, runs the existing agent, runs the acceptance command independently,

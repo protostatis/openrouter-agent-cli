@@ -29,6 +29,18 @@ def _preview(value: Any, limit: int = 800) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+def _is_generated_path(path: str) -> bool:
+    """True for Python bytecode artifacts that never prove real work.
+
+    A fresh repository without a .gitignore surfaces ``__pycache__`` files as
+    untracked changes; listing them in ``changed_files`` tells the developer
+    (and the repair prompt) that something changed when no source file did.
+    """
+    if "__pycache__" in path.split("/"):
+        return True
+    return path.endswith((".pyc", ".pyo"))
+
+
 class UserCompletionPolicy:
     """Run a user-supplied acceptance command before accepting final text."""
 
@@ -129,9 +141,10 @@ class UserCompletionPolicy:
         seen: set[str] = set()
         deduped: list[str] = []
         for path in files:
-            if path not in seen:
-                seen.add(path)
-                deduped.append(path)
+            if path in seen or _is_generated_path(path):
+                continue
+            seen.add(path)
+            deduped.append(path)
         return deduped[:100]
 
     def _decide(self, result: dict[str, Any]) -> CheckpointDecision:

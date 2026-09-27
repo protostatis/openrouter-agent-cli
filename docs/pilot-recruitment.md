@@ -33,8 +33,8 @@ permission prompts — treat it like any agent you let run locally.
 
 Terminal coding agent that refuses to claim "done" without proof. You give it a
 task and an acceptance command; it runs your check before accepting its own
-answer, reports verified / failed / not-verified, allows one repair, never
-loops. Any OpenRouter model, honest cache accounting, `pip install
+answer, reports verified / failed / not-verified, allows a short bounded
+repair round, never loops. Any OpenRouter model, honest cache accounting, `pip install
 openrouter-agent-cli`. Running a user pilot — DM me to try it on a real repo.
 
 ## Public demonstration — longer (dev forum, newsletter, or blog)
@@ -44,8 +44,9 @@ don't have: it will not claim the work is done until a command you choose
 actually passes. You define done with an acceptance command (for example,
 `pytest tests/test_auth.py`); the tool runs it at the completion boundary and
 reports one of three honest states — verified, failed, or not verified. A
-failing check earns exactly one additional model response, then it stops with the evidence
-instead of looping.
+failing check earns a short, bounded repair round (the agent may inspect
+for a couple more responses; any change runs the check again), then it stops
+with the evidence instead of looping.
 
 It also keeps cache and context claims honest: it reports provider cache
 counters only when the provider actually exposes them.

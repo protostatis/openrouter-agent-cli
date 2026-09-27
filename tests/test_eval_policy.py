@@ -174,6 +174,37 @@ def test_complete_mutating_batch_stops_before_next_model_call(
     assert final.verdict == "pass"
 
 
+def test_read_only_repair_response_still_gets_exactly_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evaluation repairs keep the original single-response behavior: a
+    read-only repair response ends the turn at the boundary instead of
+    continuing like the user acceptance path now does. This pins the
+    isinstance gate that separates the two policies."""
+    engine, transport, policy, task = _engine_and_policy(
+        tmp_path,
+        monkeypatch,
+        [
+            {"text": "initial completion"},
+            {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"text": "this response must not be requested"},
+        ],
+    )
+    _run_engine(engine, policy)
+
+    # Exactly one repair response was consumed (the read-only one), and the
+    # scripted response after it must remain unused.
+    assert len(transport.requests) == 2
+    state = policy.snapshot()
+    assert state["repair_injections"] == 1
+    repair_messages = [
+        message
+        for message in engine.messages
+        if message.get("content") == REPAIR_MESSAGE
+    ]
+    assert len(repair_messages) == 1
+
+
 def test_infrastructure_probe_continues_without_intervention(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
