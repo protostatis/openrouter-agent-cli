@@ -3918,15 +3918,49 @@ _ENV_SENSITIVE = {"UNBROWSER_BINARY", "OPENROUTER_AGENT_SESSION_DIR"}
 _ENV_AUTO_ALLOWLIST = _ENV_ALLOWLIST - _ENV_SENSITIVE
 
 
+def _global_env_path() -> Path:
+    """The app-home .env, next to policy.json (default ~/.openrouter-agent-cli).
+
+    This is the one file a developer edits once so every invocation finds the
+    API key, from any directory — the session-dir override is honored so the
+    key file travels with a relocated app home.
+    """
+    session_root = Path(
+        os.environ.get(
+            "OPENROUTER_AGENT_SESSION_DIR", "~/.openrouter-agent-cli/sessions"
+        )
+    ).expanduser()
+    return session_root.parent / ".env"
+
+
+def _missing_api_key_message() -> str:
+    return (
+        "ERROR: missing OpenRouter API key. Set OPENROUTER_API_KEY, pass "
+        "--api-key, or put OPENROUTER_API_KEY=... in "
+        f"{_global_env_path()} (read automatically on every start)."
+    )
+
+
 def _load_dotenv(env_file: str | None = None) -> None:
-    """Load .env allowlisted keys only. Auto-load excludes sensitive executable vars."""
+    """Load .env allowlisted keys only. Auto-load excludes sensitive executable vars.
+
+    Auto-load order (first file defining a key wins; real environment
+    variables always win over auto-loaded files): project .env in the current
+    directory, then the global app-home .env, then a source-checkout .env.
+    """
     is_explicit = env_file is not None
     allow = _ENV_ALLOWLIST if is_explicit else _ENV_AUTO_ALLOWLIST
     candidates: list[Path] = []
     if env_file:
         candidates.append(Path(env_file).expanduser())
     else:
-        candidates.extend([Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"])
+        candidates.extend(
+            [
+                Path.cwd() / ".env",
+                _global_env_path(),
+                Path(__file__).resolve().parent.parent / ".env",
+            ]
+        )
 
     # Prefer python-dotenv if installed, but filter to allowlist
     try:
@@ -4246,10 +4280,7 @@ def main() -> int:
         _load_dotenv(args.env_file)
 
     if not args.api_key:
-        print(
-            "ERROR: missing OpenRouter API key. Set OPENROUTER_API_KEY or pass --api-key.",
-            file=sys.stderr,
-        )
+        print(_missing_api_key_message(), file=sys.stderr)
         raise SystemExit(1)
 
     explicit_system_prompt = args.system_prompt is not None

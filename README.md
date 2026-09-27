@@ -74,6 +74,18 @@ export OPENROUTER_API_KEY=sk-or-...
 openrouter-agent
 ```
 
+Or store the key once in the global config file, so every launch works from
+any directory (an exported shell variable still wins; a project-local `.env`
+overrides the global file for that project):
+
+```bash
+printf 'OPENROUTER_API_KEY=sk-or-...\n' > ~/.openrouter-agent-cli/.env
+chmod 600 ~/.openrouter-agent-cli/.env
+```
+
+The file is read automatically on every start, and any allowlisted variable
+works there too (for example `OPENROUTER_MODEL=...`).
+
 Or without installation:
 
 ```bash

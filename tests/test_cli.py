@@ -23,12 +23,15 @@ from openrouter_agent_cli.cli import (
     ToolPermissionPolicy,
     _estimate_tokens,
     _adapt_system_prompt_for_profile,
+    _global_env_path,
     _message_content_as_text,
+    _missing_api_key_message,
     _openrouter_http_error_lines,
     _prepare_system_prompt,
     _sanitize_session_id,
     _truncate,
     tools_for_profile,
+    _load_dotenv,
 )
 from openrouter_agent_cli.utils import _decode_tool_arguments
 
@@ -818,3 +821,90 @@ class TestEntryPoints:
         scripts = data["project"]["scripts"]
         assert scripts["ora"] == "openrouter_agent_cli.cli:main"
         assert scripts["ora"] == scripts["openrouter-agent"]
+
+
+# Runs in a subprocess so the developer machine's real .env (present next to
+# the source checkout) can never leak keys into the test process.
+_ENV_PROBE = (
+    "from openrouter_agent_cli.cli import _load_dotenv\n"
+    "import os\n"
+    "_load_dotenv()\n"
+    "print('KEY=' + os.environ.get('OPENROUTER_API_KEY', '-'))\n"
+    "print('MODEL=' + os.environ.get('OPENROUTER_MODEL', '-'))\n"
+)
+
+
+def _probe_env(tmp_path: Path, cwd: Path, extra_env: dict | None = None) -> dict:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "OPENROUTER_AGENT_SESSION_DIR": str(tmp_path / "sessions"),
+    }
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(
+        [sys.executable, "-c", _ENV_PROBE],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    values = dict(
+        line.split("=", 1)
+        for line in result.stdout.splitlines()
+        if "=" in line
+    )
+    return values
+
+
+class TestGlobalEnvConfig:
+    def test_global_env_file_provides_api_key(self, tmp_path):
+        """One edit to the app-home .env makes the key available on any start,
+        from any working directory."""
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-global\n")
+        workdir = tmp_path / "elsewhere"
+        workdir.mkdir()
+        values = _probe_env(tmp_path, workdir)
+        assert values["KEY"] == "sk-or-from-global"
+
+    def test_project_env_file_overrides_global(self, tmp_path):
+        (tmp_path / ".env").write_text(
+            "OPENROUTER_API_KEY=sk-or-global\nOPENROUTER_MODEL=global-model\n"
+        )
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".env").write_text(
+            "OPENROUTER_API_KEY=sk-or-project\nOPENROUTER_MODEL=project-model\n"
+        )
+        values = _probe_env(tmp_path, project)
+        assert values["KEY"] == "sk-or-project"
+        assert values["MODEL"] == "project-model"
+
+    def test_shell_environment_wins_over_env_files(self, tmp_path):
+        (tmp_path / ".env").write_text("OPENROUTER_MODEL=file-model\n")
+        workdir = tmp_path / "elsewhere"
+        workdir.mkdir()
+        values = _probe_env(
+            tmp_path, workdir, {"OPENROUTER_MODEL": "shell-model"}
+        )
+        assert values["MODEL"] == "shell-model"
+
+    def test_global_env_path_follows_session_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "home" / "sessions")
+        )
+        assert _global_env_path() == tmp_path / "home" / ".env"
+
+        monkeypatch.delenv("OPENROUTER_AGENT_SESSION_DIR")
+        default_path = _global_env_path()
+        assert default_path.name == ".env"
+        assert default_path.parent.name == ".openrouter-agent-cli"
+
+    def test_missing_key_error_points_at_global_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "sessions")
+        )
+        message = _missing_api_key_message()
+        assert "ERROR: missing OpenRouter API key" in message
+        assert "--api-key" in message
+        assert str(tmp_path / ".env") in message
