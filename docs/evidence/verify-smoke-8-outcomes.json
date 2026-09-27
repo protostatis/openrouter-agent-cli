@@ -1,0 +1,88 @@
+{
+  "trial": "verify-smoke-8",
+  "generated_at_utc": "2026-09-07",
+  "suite": "bounded-generalization-v1",
+  "source_records": ".agent-eval/verify-smoke-8/runs/bounded-generalization-v1.jsonl (gitignored local record)",
+  "verdict_source": "docs/verify-smoke-8-result.md outcomes table (acceptance run separately)",
+  "attempts": [
+    {
+      "task_id": "novel01_attrerror_none",
+      "treatment": "model_alone",
+      "profile": "baseline",
+      "verdict": "pass",
+      "run_id": "run-1788794237710-10034",
+      "total_tokens": 12689,
+      "repair_injections": null
+    },
+    {
+      "task_id": "novel01_attrerror_none",
+      "treatment": "model_plus_policy",
+      "profile": "assisted",
+      "verdict": "pass",
+      "run_id": "run-1788794427110-10034",
+      "total_tokens": 8175,
+      "repair_injections": 0
+    },
+    {
+      "task_id": "novel03_unbound_local",
+      "treatment": "model_plus_policy",
+      "profile": "assisted",
+      "verdict": "fail",
+      "run_id": "run-1788794553688-10034",
+      "total_tokens": 15103,
+      "repair_injections": 1
+    },
+    {
+      "task_id": "novel03_unbound_local",
+      "treatment": "model_alone",
+      "profile": "baseline",
+      "verdict": "pass",
+      "run_id": "run-1788794846517-10034",
+      "total_tokens": 13342,
+      "repair_injections": null
+    },
+    {
+      "task_id": "novel05_silent_min_not_max",
+      "treatment": "model_alone",
+      "profile": "baseline",
+      "verdict": "pass",
+      "run_id": "run-1788795116886-10034",
+      "total_tokens": 11735,
+      "repair_injections": null
+    },
+    {
+      "task_id": "novel05_silent_min_not_max",
+      "treatment": "model_plus_policy",
+      "profile": "assisted",
+      "verdict": "pass",
+      "run_id": "run-1788795465617-10034",
+      "total_tokens": 5964,
+      "repair_injections": 0
+    },
+    {
+      "task_id": "novel08_transform_csv_normalize",
+      "treatment": "model_plus_policy",
+      "profile": "assisted",
+      "verdict": "pass",
+      "run_id": "run-1788795616928-10034",
+      "total_tokens": 6417,
+      "repair_injections": 0
+    },
+    {
+      "task_id": "novel08_transform_csv_normalize",
+      "treatment": "model_alone",
+      "profile": "baseline",
+      "verdict": "pass",
+      "run_id": "run-1788795732376-10034",
+      "total_tokens": 17306,
+      "repair_injections": null
+    }
+  ],
+  "unmatched_verdicts": [],
+  "summary": {
+    "baseline_pass": 4,
+    "assisted_pass": 3,
+    "rescues": 0,
+    "regressions": 1
+  }
+}

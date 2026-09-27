@@ -166,9 +166,21 @@ batch.
 ## Gate result: 20 records complete (2026-09-07)
 
 The 20-record exit criterion is now met: 3 earlier attempts plus batches 1 and
-2 leave 20 complete, isolated, auditable records, with zero merged changes,
-zero workspace escapes, and every acceptance pass treated as review evidence
+2 leave 20 complete, isolated, auditable records, the runner issues no merge
+or push commands, and every acceptance pass was treated as review evidence
 only.
+
+What those records can and cannot prove: changes are measured with git inside
+each task's worktree, so repo-local edits and acceptance results are fully
+covered, and the runner rejects recorded changes outside a task's
+allowed-path list when one is set. The runner does NOT OS-sandbox the host
+shell — host execution is an explicit opt-in flag
+(`AGENT_EVAL_ALLOW_HOST_EXECUTION=1`) and is unrestricted on macOS — so a
+command writing files outside the worktree would not show up in these
+records. Containment rests on disposable per-task worktrees, the allowed-path
+check, and human review, not on an operating-system sandbox. (Corrected
+after review: an earlier version of this paragraph claimed "zero workspace
+escapes", which is stronger than the mechanism supports.)
 
 What the 20 records actually show, in plain terms:
 
@@ -227,16 +239,18 @@ active (`examples/dogfood-gate-batch3.json`, records under
 
 | Task | Before | With generalized fixes | What fired |
 |---|---|---|---|
-| test-decode-tool-args-nonstr | no change (twice) | verified, patch accepted | no-progress nudge |
+| test-decode-tool-args-nonstr | no change (twice) | verified, patch accepted | none needed — model edited directly |
 | test-help-covers-commands | phantom test (human-caught) | structural_violation, auto-rejected | no-progress nudge + escaped-newline scan |
 | test-cwd-not-found-message | no change | real edit, honest failure | no-progress nudge; acceptance caught a nonexistent fixture |
 
 The decisive evidence: the model emitted the literal-`\n` phantom test AGAIN,
 and this time the structural scan caught it AUTOMATICALLY — the same false
 pass that previously required human review now cannot reach the review queue
-as "verified". The nudge fired in 2 of 3 tasks and both then produced real
-edits. The remaining failure (a test using a nonexistent fixture) is a normal
-model error, caught by the acceptance command as designed.
+as "verified". The nudge fired in 2 of the 3 tasks (the decode-tools task
+needed none — the model edited directly, verified on its own), and both
+nudged tasks then produced real file edits. The remaining failure (a test
+using a nonexistent fixture) is a normal model error, caught by the
+acceptance command as designed.
 
 Gate records now total 23 (20 + batch 3). Validation plan for calling the
 no-edit problem fixed: 30 held-out required-change attempts with the guard;

@@ -48,8 +48,12 @@ honesty, not completion.
 - Task order fixed by seed 20260907 before the first attempt (order printed by
   `--dry-run`). Each task's two attempts run back-to-back with the leading arm
   alternating, so provider drift over hours hits both arms equally.
-- Resume-safe: an interrupted batch skips pairs that already have verdicts on
-  disk and never duplicates an attempt.
+- Resume-safe: an interrupted batch skips pairs where BOTH arms already have
+  verdicts on disk. A half-finished pair (only one arm recorded) re-runs both
+  arms so the two attempts stay adjacent in time; scoring always keeps the
+  FIRST verdict per task and arm, so a re-run never changes a recorded
+  outcome. (Corrected after review: an earlier version of this line claimed
+  an attempt is never duplicated, which is not true for half-finished pairs.)
 
 ## Decision rules (written before running)
 
@@ -113,8 +117,10 @@ Paired outcomes: 31 both-pass, 2 both-fail, 5 full7-only passes
 2 core4-only passes (novel08, xfix03).
 
 **Decision per the frozen rule: 7.5 points difference — below the 10-point
-threshold. Treat the profiles as equivalent on this bank. Keep full7 as the
-default; change nothing.**
+line that separates "equivalent" from "trend", and far below the 25-point bar
+at which the plan would have required changing the default. Treat the
+profiles as equivalent on this bank. Keep full7 as the default; change
+nothing.**
 
 Reading: the dramatic earlier signal (core4 3/3 vs full7 1/3 on one hard task)
 did not generalize — across 40 varied tasks the tool count barely matters for
