@@ -3,7 +3,8 @@ environment, in one of two configurations.
 
 - mode=unassisted (default): plain headless agent, no acceptance gate.
 - mode=policy: acceptance-gate policy — the task's user-owned acceptance
-  command must pass before "done" is accepted, with one repair response.
+  command must pass before "done" is accepted, with a short, bounded repair
+  round after a failed check.
 
 Agent kwargs (``--ak``):
 - ``mode=<unassisted|policy>``
@@ -35,7 +36,7 @@ from harbor.models.agent.context import AgentContext
 
 
 class OraAgent(BaseInstalledAgent):
-    """openrouter-agent-cli as a Harbor agent (unassisted or one-repair policy)."""
+    """openrouter-agent-cli as a Harbor agent (unassisted or acceptance-gate)."""
 
     MODEL_CONNECTION = ModelConnectionSpec(
         default_provider="openrouter",

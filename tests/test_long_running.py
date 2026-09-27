@@ -228,6 +228,43 @@ async def test_approval_wait_is_not_counted_as_tool_runtime(
     assert record["duration_ms"] < record["approval_wait_ms"]
 
 
+@pytest.mark.asyncio
+async def test_cancelled_approval_wait_is_not_counted_as_runtime(
+    tmp_path, monkeypatch
+):
+    """Cancelling the run while the permission prompt is open must still
+    record the wait separately — otherwise the whole human pause lands in
+    duration_ms, which is exactly what fix 5 removes."""
+    engine = _engine_with_task(
+        tmp_path,
+        monkeypatch,
+        task="List the directory",
+        verify_command="true",
+        responses=[{"text": "done"}],
+    )
+    monkeypatch.setattr(
+        engine, "_effective_policy_decision", lambda name: "ask"
+    )
+
+    async def slow_confirm(tool_name, args):
+        await asyncio.sleep(5)
+        return True
+
+    monkeypatch.setattr(engine, "_confirm_tool_call", slow_confirm)
+    run = asyncio.create_task(
+        engine._run_tool_call("list_dir", {"path": "."}, "tc-cancel")
+    )
+    await asyncio.sleep(0.08)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    record = engine._tool_records["tc-cancel"]
+    assert record["status"] == "cancelled"
+    assert record["approval_wait_ms"] >= 60
+    assert record["duration_ms"] < record["approval_wait_ms"]
+
+
 def test_work_order_persists_across_resume(tmp_path, monkeypatch):
     session_dir = tmp_path / "sessions"
     monkeypatch.setenv("OPENROUTER_AGENT_SESSION_DIR", str(session_dir))
@@ -425,10 +462,10 @@ async def test_read_only_repair_rounds_are_bounded(
         result = await engine._run_user_turn(client, "Do the work.")
 
     assert result == ""
-    # write, final-answer, two allowed read-only rounds, then one more
-    # read-only reply that trips the bound and ends the turn; the 6th
-    # scripted response must not be consumed.
-    assert len(engine.model_transport.requests) == 5
+    # write, final-answer, then exactly two read-only responses (the bound):
+    # the first continues, the second trips the bound and stops the turn with
+    # a fresh check. The 5th and 6th scripted responses must not be consumed.
+    assert len(engine.model_transport.requests) == 4
     assert engine.completion_policy.last_result["status"] == "failed"
     assert engine.work_order["status"] == "failed"
     captured = capsys.readouterr()

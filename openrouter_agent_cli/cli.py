@@ -586,12 +586,13 @@ _GENERIC_REPAIR_MESSAGE = (
     "make any necessary repairs, and reply when the task is complete."
 )
 
-# User-acceptance repair: how many all-read-only model responses may follow an
-# injected repair before the turn stops with fresh evidence. Read-only responses
-# inspect; they do not repair, so a one-response budget would kill any model
-# that inspects before editing (the common inspect-then-edit pattern). Mutating
-# responses and final answers are bounded elsewhere (their checkpoints stop the
-# turn), so this bound only covers pure inspection rounds.
+# User-acceptance repair: the maximum number of all-read-only model responses
+# after an injected repair. The count advances each time such a response
+# completes; while the count is under the bound the turn continues (so an
+# inspect-then-edit model gets to act on what it learned), and at the bound the
+# acceptance check re-runs and the turn stops with fresh evidence. Mutating
+# batches and final answers are bounded elsewhere (their checkpoints stop the
+# turn), so this bound only covers pure inspection responses.
 REPAIR_READ_ONLY_ROUNDS = 2
 
 # Required-change guard: after this many consecutive model turns with no
@@ -2945,11 +2946,15 @@ class OpenRouterAgentCLI:
             return f"Tool blocked by deny policy: {tool_name}"
         if decision == "ask":
             approval_started = time.monotonic()
-            allowed = await self._confirm_tool_call(tool_name, args)
-            if approval_clock is not None:
-                approval_clock["ms"] = round(
-                    (time.monotonic() - approval_started) * 1000
-                )
+            try:
+                allowed = await self._confirm_tool_call(tool_name, args)
+            finally:
+                # Record the wait even when the prompt is cancelled mid-read;
+                # otherwise the whole human pause lands in duration_ms.
+                if approval_clock is not None:
+                    approval_clock["ms"] = round(
+                        (time.monotonic() - approval_started) * 1000
+                    )
             if not allowed:
                 return f"Tool call denied by user: {tool_name}"
 
@@ -3813,24 +3818,22 @@ class OpenRouterAgentCLI:
                     self._save_session()
                     return ""
 
-            # A repair request grants a short repair sequence: read-only
-            # responses (list/read/search) may continue up to
-            # REPAIR_READ_ONLY_ROUNDS times so an inspect-then-edit model can
-            # act on what it learned; mutating batches and final answers stop
-            # the turn at their own checkpoints (with the check re-run). At the
-            # bound, re-run the acceptance check once more and stop with that
+            # A repair request grants a short repair sequence: up to
+            # REPAIR_READ_ONLY_ROUNDS all-read-only responses may follow the
+            # injection (so an inspect-then-edit model can act on what it
+            # learned), while mutating batches and final answers stop the turn
+            # at their own checkpoints with the check re-run. At the bound, the
+            # acceptance check runs once more and the turn stops with that
             # fresh evidence instead of ending silently. Evaluation hooks keep
             # the original single-response behavior.
             if self._checkpoint_repair_pending:
-                if (
-                    isinstance(self.checkpoint_hook, UserCompletionPolicy)
-                    and self._repair_read_only_rounds < REPAIR_READ_ONLY_ROUNDS
-                ):
-                    if turn + 1 >= turn_limit:
-                        turn_limit += 1
+                if isinstance(self.checkpoint_hook, UserCompletionPolicy):
                     self._repair_read_only_rounds += 1
-                    turn += 1
-                    continue
+                    if self._repair_read_only_rounds < REPAIR_READ_ONLY_ROUNDS:
+                        if turn + 1 >= turn_limit:
+                            turn_limit += 1
+                        turn += 1
+                        continue
                 decision = await self._run_checkpoint(
                     kind="final_answer", turn=turn + 1
                 )
@@ -3870,8 +3873,9 @@ class OpenRouterAgentCLI:
             # A policy-enabled run that exhausts its normal budget has not
             # emitted a final answer, but it may still have left a
             # nearly-complete workspace behind. Give the user-owned acceptance
-            # policy one explicit boundary here. A failed check receives the
-            # same single repair response as a failed final-answer check;
+            # policy one explicit boundary here. A failed check receives the same
+            # one repair injection as a failed final-answer check (injections are
+            # capped at one per turn; read-only follow-ups are bounded separately);
             # unassisted runs retain the old behavior and stop at the limit.
             if turn >= turn_limit and isinstance(
                 self.checkpoint_hook, UserCompletionPolicy

@@ -142,7 +142,9 @@ how long one provider request may wait, `--provider-retries` controls retries
 after retryable provider errors, and `--repeat-tool-call-limit` controls how
 many identical tool batches are tolerated before the loop-break nudge.
 Acceptance checking remains separate and is enabled with `--verify-command`;
-it still allows only one repair response.
+a failed check earns a short, bounded repair round (up to two inspection
+responses; any changing tool runs the check again), then the turn stops with
+the evidence.
 
 For internal repository work, the bounded workbench creates one Git worktree
 per task, runs the existing agent, runs the acceptance command independently,
