@@ -210,3 +210,27 @@ def test_guard_inactive_without_git_repository(tmp_path):
 
     assert result == "done"
     assert _nudge_request_index(transport) is None
+
+
+def test_first_turn_edit_then_final_is_accepted(tmp_path, git_repo):
+    """An edit made on the very first turn counts as progress, not as the baseline.
+
+    Regression: the baseline used to be captured only AFTER the first turn's
+    tools had run, so a turn-1 edit silently became the baseline and the
+    correct final answer on turn 2 was suppressed, then stopped as 'no
+    changes made'. The baseline must be captured before any model action.
+    """
+    transport = MockTransport(
+        {"responses": [
+            _tool("write_file", path="out.txt", content="real work"),
+            {"text": "done"},
+        ]}
+    )
+    agent = _make_agent(tmp_path)
+    agent.model_transport = transport
+
+    result = _run_turn(agent)
+
+    assert result == "done"
+    assert _nudge_request_index(transport) is None
+    assert (tmp_path / "out.txt").read_text() == "real work"

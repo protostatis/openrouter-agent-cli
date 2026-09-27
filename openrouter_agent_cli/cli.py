@@ -3389,8 +3389,15 @@ class OpenRouterAgentCLI:
         discover_rounds = 0
         # Required-change guard state (active only when require_repo_change):
         # baseline worktree signature, consecutive unchanged model turns, and
-        # whether the one permitted nudge has been injected.
+        # whether the one permitted nudge has been injected. The baseline is
+        # captured BEFORE the first model call: capturing it after the first
+        # turn's tools would make a turn-1 edit look like the baseline, and
+        # the agent's correct final answer would then be wrongly suppressed
+        # (and stopped) as "no change". None means outside git, where the
+        # guard stays silent.
         baseline_signature: str | None = None
+        if self.require_repo_change:
+            baseline_signature = await self._repo_content_signature()
         unchanged_turns = 0
         no_progress_nudged = False
 
