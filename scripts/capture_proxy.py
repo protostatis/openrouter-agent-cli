@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import json
 import threading
 import time
@@ -54,6 +55,52 @@ def _decode_response(headers, raw: bytes) -> tuple:
     return text, usage
 
 
+def _sha256_json(value) -> str:
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _message_content(messages: list[dict], role: str):
+    for message in messages:
+        if message.get("role") == role:
+            return message.get("content")
+    return None
+
+
+def _capture_request_headers(headers) -> dict[str, str]:
+    """Keep only non-secret experiment headers from the incoming request."""
+    allowed = {
+        "x-openrouter-agent-run-id",
+        "x-openrouter-agent-tool-profile",
+        "x-openrouter-agent-source-digest",
+    }
+    return {
+        name.lower(): value
+        for name, value in headers.items()
+        if name.lower() in allowed
+    }
+
+
+def _request_metadata(request_headers: dict[str, str], request_body) -> dict:
+    """Return reproducibility identifiers without duplicating prompt contents."""
+    body = request_body if isinstance(request_body, dict) else {}
+    messages = body.get("messages") or []
+    tools = body.get("tools") or []
+    return {
+        "run_id": request_headers.get("x-openrouter-agent-run-id"),
+        "tool_profile": request_headers.get("x-openrouter-agent-tool-profile"),
+        "source_digest": request_headers.get("x-openrouter-agent-source-digest"),
+        "model": body.get("model"),
+        "tool_count": len(tools),
+        "tool_schema_sha256": _sha256_json(tools),
+        "system_prompt_sha256": _sha256_json(_message_content(messages, "system")),
+        "task_prompt_sha256": _sha256_json(_message_content(messages, "user")),
+        "request_sha256": _sha256_json(body),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     upstream: str = "http://localhost:8788"
     log_path: str = "/tmp/capture.jsonl"
@@ -75,6 +122,10 @@ class Handler(BaseHTTPRequestHandler):
                 entry["request_body"] = json.loads(body)
         except Exception:
             entry["request_body"] = body.decode("utf-8", "replace")
+        entry["request_headers"] = _capture_request_headers(self.headers)
+        entry["metadata"] = _request_metadata(
+            entry["request_headers"], entry["request_body"]
+        )
 
         url = self.upstream.rstrip("/") + self.path
         req = urllib.request.Request(
