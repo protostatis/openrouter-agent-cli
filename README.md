@@ -102,6 +102,11 @@ openrouter-agent \
   --session-id my-session \
   --workdir ~/Projects \
   --max-turns 24 \
+  --request-timeout 60 \
+  --provider-retries 3 \
+  --repeat-tool-call-limit 1 \
+  --tool-profile full7 \
+  --run-id local-run-001 \
   --max-history-messages 60 \
   --command-timeout 30 \
   --discovery auto \
@@ -121,6 +126,80 @@ Disable tools:
 openrouter-agent --no-tools
 ```
 
+For controlled tool-surface experiments, `--tool-profile full7` keeps the
+existing seven tools. `--tool-profile core4` exposes only
+`run_bash`, `read_file`, `write_file`, and `edit_file`; their schemas and
+execution behavior are unchanged. Pass the same tool-neutral text through
+`--system-prompt` when comparing profiles.
+
+Runtime policy controls are explicit and bounded: `--request-timeout` limits
+how long one provider request may wait, `--provider-retries` controls retries
+after retryable provider errors, and `--repeat-tool-call-limit` controls how
+many identical tool batches are tolerated before the loop-break nudge.
+Acceptance checking remains separate and is enabled with `--verify-command`;
+it still allows only one repair response.
+
+For internal repository work, the bounded workbench creates one Git worktree
+per task, runs the existing agent, runs the acceptance command independently,
+and leaves a patch plus evidence for review. It never merges or pushes:
+
+```bash
+uv run python scripts/run_internal_workbench.py \
+  --manifest examples/internal-workbench.json
+```
+
+After a batch finishes, create the human-review queue with:
+
+```bash
+uv run python scripts/review_internal_workbench.py \
+  --results-dir ~/.openrouter-agent-cli/workbench/example
+```
+
+The queue treats a passing acceptance command as evidence only. A changed
+patch still requires a person to inspect it before it can be used.
+
+Two structural defenses run automatically on every required-change task:
+
+- A no-progress guard watches the actual worktree content and nudges the
+  worker once after several turns without any change; a final answer on an
+  unchanged worktree is suppressed, and a second one stops the attempt.
+- Added Python lines are scanned for literal escaped-newline sequences (a
+  known model failure mode that once hid a phantom test as a comment), and
+  declared add-a-test tasks can require genuinely new, passing pytest nodes
+  via a `"test_growth": {"minimum_new_nodes": 1}` entry in the manifest.
+
+Each task may depend on an earlier verified task; dependencies currently gate
+start order but do not copy one task's patch into another task's worktree.
+Use `--max-concurrency 1` while validating the workflow; increase it only
+after workspace isolation and resource limits have been reviewed. The
+manifest and acceptance commands are trusted operator inputs.
+Tasks require at least one tracked or untracked repository change by default;
+set `"require_changes": false` for an intentional review-only task.
+Use `"allowed_paths": ["tests/**", "docs/**"]` when a task must stay within
+specific path globs. An out-of-scope change is recorded as a policy violation
+and is never independently verified as accepted.
+Internal tasks use the smaller `core4` tool set by default to reduce
+exploration overhead; select `full7` only when a task genuinely needs web
+discovery.
+
+The default `HEAD` source is intentional: uncommitted files in the operator's
+checkout are not silently exposed to a worker. Use `--source-ref` to select a
+committed baseline explicitly.
+
+For a randomized, paired Harbor comparison using a locally built wheel:
+
+```bash
+uv run python scripts/run_tool_profile_comparison.py \
+  --task eval_suites/harbor_xfix/report_pipeline \
+  --local-wheel /tmp/ora-dist/openrouter_agent_cli-0.2.1-py3-none-any.whl \
+  --repeats 3
+```
+
+The script records the profile order, run identifiers, prompt hash, source
+wheel hash, and Harbor task checksum in its manifest. The capture proxy also
+records the run identifier, profile, model, tool count, prompt hashes, and
+tool-schema hash without recording authorization headers.
+
 Debug logging:
 
 ```bash
@@ -133,6 +212,7 @@ openrouter-agent --debug  # timestamps + idle instrumentation on stderr
 - `/exit`
 - `/new [id]` (fresh session — history reset, isolates crypto contamination)
 - `/model [id]`
+- `/retry` (retry the last provider-failed request without duplicating its user message)
 - `/usage`
 - `/status`
 - `/task [description]`
@@ -152,6 +232,8 @@ openrouter-agent --debug  # timestamps + idle instrumentation on stderr
 - `/cwd [path]`
 - `/discovery [auto|mock|real|off]`
 - `/concurrency [n]` (1-16, cap for parallel `discover`)
+- `/max-discover [n]` (1-10, cap for discover calls per batch)
+- `/max-rounds [n]` (1-5, cap for discover deepening rounds)
 - `/inspect <call-id>`
 - `/sessions`
 - `/resume <id>`

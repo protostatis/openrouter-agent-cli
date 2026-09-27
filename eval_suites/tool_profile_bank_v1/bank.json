@@ -1,0 +1,93 @@
+{
+  "schema_version": "tool-profile-bank-v1",
+  "bank_id": "tool-profile-bank-v1",
+  "frozen_at": "2026-09-07",
+  "question": "Does the four-tool profile (core4) complete more verified tasks than the seven-tool profile (full7) across varied task families?",
+  "arms": {
+    "a": {"name": "full7", "tool_profile": "full7"},
+    "b": {"name": "core4", "tool_profile": "core4"}
+  },
+  "controls": {
+    "model": "nvidia/nemotron-3.5-lightning:free",
+    "prompt_file": "eval_suites/campaign_control.md",
+    "prompt_sha256": "03f0713da89cf697a251f098eae0b0a7ce2cdfa7f7e9ba93dcf7e875e76427db",
+    "max_turns": 16,
+    "command_timeout_s": 30,
+    "repeats": 1,
+    "treatment": "model_alone",
+    "discovery_mode": "off",
+    "execution": "host_acknowledged (AGENT_EVAL_ALLOW_HOST_EXECUTION=1; macOS, no bwrap)"
+  },
+  "seed": 20260907,
+  "pairs": 40,
+  "tasks": {
+    "crash_novel_v1": [
+      "novel01_attrerror_none",
+      "novel02_typeerror_missing_arg",
+      "novel03_unbound_local",
+      "novel04_recursion",
+      "novel05_silent_min_not_max",
+      "novel06_silent_sum_not_count",
+      "novel07_silent_count_not_truthiness",
+      "novel08_transform_csv_normalize",
+      "novel09_transform_filter_records",
+      "novel10_transform_join_totals"
+    ],
+    "bounded_generalization_v2": [
+      "repair01_missing_name",
+      "repair02_missing_tier",
+      "repair03_running_total_scope",
+      "repair04_recursion_base",
+      "silent01_inclusive_age",
+      "silent02_max_score",
+      "silent03_count_records",
+      "transform01_csv_dates",
+      "transform02_filter_priority",
+      "transform03_join_account_totals"
+    ],
+    "coding_smoke_v1": [
+      "greet",
+      "sumlib",
+      "clamp",
+      "dedup",
+      "xfix01_indexerror",
+      "xfix03_typeerror_none",
+      "xfix07_silent_range",
+      "xfix10_silent_strsort",
+      "hard_stale_refactor",
+      "hard_shared_constant",
+      "hard_ledger",
+      "hard_fix_failing_test",
+      "hard_api_rename",
+      "hard_crash_counts",
+      "hard_ledger_refunds",
+      "hard_zero_division",
+      "hard_silent_offbyone",
+      "hard_normalize_csv",
+      "hard_docs_conflict",
+      "hard_crashing_script"
+    ]
+  },
+  "families": {
+    "crash_fix": 10,
+    "silent_wrong_output": 9,
+    "transform": 7,
+    "basic_function": 4,
+    "multi_file_refactor_or_test_or_debug": 10
+  },
+  "decision_rules": {
+    "primary_metric": "verified pass rate difference (full7 minus core4) over 40 matched pairs; an infrastructure_error counts as a failure for its arm and is also reported separately",
+    "worth_acting_on": "absolute pass-rate difference >= 25 percentage points (>= 10 net pairs)",
+    "trend_not_action": "difference between 10 and 25 points: keep the current default, record the trend, change nothing",
+    "no_difference": "difference below 10 points: treat the profiles as equivalent on this bank",
+    "interim_stop": "after the first 20 pairs in seeded order, stop early only if one arm leads by >= 35 points (>= 7 net pairs); otherwise continue to 40",
+    "change_rule": "the default tool profile changes only if the core4 arm clears the worth-acting-on threshold; no other feature, prompt, or policy may change during the run"
+  },
+  "accounting": [
+    "verified pass/fail per arm (primary)",
+    "infrastructure errors reported separately",
+    "total provider tokens per arm",
+    "model request counts per arm",
+    "median attempt latency per arm"
+  ]
+}

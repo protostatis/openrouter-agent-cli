@@ -1,0 +1,8 @@
+[
+  {"id":"o1","lines":[{"sku":"A","quantity":2},{"sku":"B","quantity":1}]},
+  {"id":"o2","lines":[{"sku":"A","quantity":2},{"sku":"A","quantity":2}]},
+  {"id":"o3","lines":[{"sku":"A","quantity":3}]},
+  {"id":"o4","lines":[{"sku":"B","quantity":2},{"sku":"C","quantity":2}]},
+  {"id":"o5","lines":[{"sku":"B","quantity":1}]},
+  {"id":"o1","lines":[{"sku":"C","quantity":1}]}
+]

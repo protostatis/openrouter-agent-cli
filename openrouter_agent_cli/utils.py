@@ -7,7 +7,7 @@ import json
 import os
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import httpx
@@ -229,6 +229,8 @@ async def call_openrouter(
     temperature: float = 0,
     parallel_tool_calls: bool | None = None,
     on_retry: Callable[[int, int, float, int], None] | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+    max_retries: int = 3,
 ) -> dict[str, Any]:
     """Make a request to the OpenRouter API."""
     body: dict[str, Any] = {
@@ -253,12 +255,15 @@ async def call_openrouter(
         ),
         "X-Title": os.environ.get("OPENROUTER_AGENT_TITLE", "OpenRouter Agent CLI"),
     }
+    if extra_headers:
+        headers.update({str(key): str(value) for key, value in extra_headers.items()})
 
     resp = await client.post(OPENROUTER_URL, json=body, headers=headers)
 
     retryable = {429, 500, 502, 503, 504}
     if resp.status_code in retryable:
-        for attempt in range(1, 4):
+        retry_limit = min(max(0, int(max_retries)), 5)
+        for attempt in range(1, retry_limit + 1):
             if resp.status_code == 429:
                 try:
                     retry_after = int(resp.headers.get("retry-after", 0))
@@ -268,7 +273,7 @@ async def call_openrouter(
             else:
                 wait = 2**attempt
             if on_retry is not None:
-                on_retry(attempt, 3, wait, resp.status_code)
+                on_retry(attempt, retry_limit, wait, resp.status_code)
             await asyncio.sleep(wait)
             resp = await client.post(OPENROUTER_URL, json=body, headers=headers)
             if resp.status_code not in retryable:

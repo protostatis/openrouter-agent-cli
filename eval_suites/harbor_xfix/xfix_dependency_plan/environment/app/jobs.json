@@ -1,0 +1,6 @@
+[
+  {"name":"a","depends_on":[]},
+  {"name":"b","depends_on":[]},
+  {"name":"c","depends_on":["a"]},
+  {"name":"d","depends_on":["b"]}
+]

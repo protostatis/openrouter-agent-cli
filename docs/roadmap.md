@@ -1,24 +1,26 @@
 # Roadmap — where this project is going
 
-**Status:** written 2026-09-03 after the v0.2.1 release and an advisor review of
-the options. Read this when deciding what to build next.
+**Status:** aligned 2026-09-06 after the v0.2.1 release and advisor reviews of
+the product, evaluation, and internal-tooling options. The alignment decision
+is recorded in `docs/roadmap-alignment-2026-09-06.md`.
 
 ## The one-line conclusion
 
-The end goal is a harness that generates candidate policies, measures each
-against real tasks with experiment integrity, and keeps only the ones that
-substantially improve what coding agents produce. The CLI is the first
-artifact under study; the harness is the durable asset.
+The end goal is a system that produces more correct, merge-ready repository
+changes per unit of human review time and provider cost, without weakening
+safety. The execution engine and internal workbench are the durable assets; the
+policy lab is the separate learning loop that tests which execution choices
+help.
 
 ## The end goal (stated 2026-09-03)
 
-A harness that generates policies — interventions at defined points in the
-coding-agent loop (completion checks, prompt overlays, tool rules, model
-choice) — and validates each one with experiment-grade integrity: contained
-execution, treatment-separated records, campaign audit, adequate power,
-preregistered selection rules. "Substantially improves" means clearing a
-pre-committed bar for effect size, regression ceiling, and cost ceiling on a
-hard task bank — never a vibes-based claim.
+A system with five separated layers: a dependable one-attempt execution engine;
+an internal workbench for bounded repository tasks; independent verification and
+review; an offline policy lab; and a held-out benchmark bank. The policy lab
+still generates and tests interventions at defined points in the coding-agent
+loop, but it is not allowed to silently change product behavior. Any policy
+claim still requires contained execution, treatment-separated records, an audit,
+adequate sample size, and precommitted success, regression, and cost rules.
 
 The current milestone below is the first step toward that goal. The pilot
 remains on the path but is re-scoped: it validates the harness's worth with
@@ -167,31 +169,43 @@ Each of these is conditional. None is promised.
   stated, the pilot is re-scoped toward evaluation-conscious users; its
   pre-committed thresholds stand unless the operator changes them.
 
-## Current milestone: prove one policy substantially improves agent output
+## Current priority: make one worker dependable
 
-**Decision being made:** whether the harness can produce a policy whose
-effect on coding-agent output clears a preregistered, powered bar — the first
-real step toward the end goal.
+**Decision being made:** whether one bounded worker can reliably produce an
+auditable, verified change that a human can approve.
 
-**What we will do (the near-term plan):**
+**What we will do first:**
 
-1. Define the policy space (`docs/policy-space.md`): the intervention points
-   and the first candidate policies (the acceptance gate, the discipline and
-   recovery prompt overlays, tool-discipline rules, model choice), plus the
-   preregistered selection rule for "substantial."
-2. Build a hard task bank: tasks where unassisted agents fail around 40–50%,
-   so a good policy has room to show a real effect.
-3. Run a power analysis, then preregister the first multi-policy campaign
-   (fingerprints, budgets, thresholds) per the experiment-contract pattern.
-4. Clear the Linux keep-awake gate in parallel — the critical dependency for
-   real-model campaigns at scale.
-5. Run the campaign, audit it, and write the decision doc.
+1. Build the verified-change runner and its deterministic provider-failure
+   laboratory.
+2. Dogfood them on 20 varied internal tasks in isolated worktrees.
+3. Add the supervised workbench only if the first phase reduces wasted work and
+   review effort.
+4. Resume the policy task bank and campaign only after the first two phases
+   produce stable internal evidence.
 
-**Exit criteria:** at least one policy clears the preregistered bar
-(effect at/above a pre-committed threshold, regressions within the ceiling,
-cost within the ceiling) on an adequately powered, audited campaign; the
-result is reported with the same separation discipline as every other
-measurement.
+**Exit criteria:** at least 20 internal tasks leave complete, isolated,
+auditable records with no known false passes or workspace escapes, and the
+operator can identify whether the worker reduces review effort. The later
+policy campaign has its own exit criteria in
+`docs/roadmap-alignment-2026-09-06.md`.
+
+### Current implementation status (2026-09-06)
+
+The first runner is now implemented in `openrouter_agent_cli/workbench.py`.
+It creates a detached worktree, records the task, runtime limits, event stream,
+worker logs, changed files, patch, and independent verifier result. It refuses
+to call an unchanged task verified by default, blocks changes outside optional
+path allowlists, separates provider failures from verification failures, and
+never merges or pushes. The dependency-aware batch wrapper and the
+human-review queue are available through the scripts under
+`scripts/run_internal_*.py` and `scripts/review_internal_workbench.py`.
+
+The runner has passed its 170-test suite and one real two-file dogfood attempt
+was verified in an isolated worktree. Manual review still found a redundant
+README block in that patch, so it was not accepted or merged. The 20-task exit
+criterion is therefore not met yet, and this implementation is a supervised
+workbench preview rather than evidence that the worker is dependable.
 
 ## Completed milestone: product polish (done 2026-09-03)
 

@@ -99,6 +99,7 @@ def test_runner_gate_and_sandbox_wiring(tmp_path, monkeypatch):
     """Mock mode is unrestricted; real mode requires sandbox or an explicit ack."""
     suite = load_suite(Path(__file__).resolve().parents[1] / "eval_suites" / "coding_smoke_v1" / "suite.json")
     monkeypatch.delenv("AGENT_EVAL_ALLOW_HOST_EXECUTION", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-key-for-testing")
     monkeypatch.delenv("AGENT_EVAL_SANDBOX", raising=False)
 
     # mock profiles pass regardless of sandbox/gate

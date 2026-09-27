@@ -9,3 +9,7 @@ build/
 ab_tests/results/
 .agent-eval/
 jobs/
+# Stray local artifacts, not part of the product
+/unbrowser/
+/whycom_search.html
+/whycom_search.json

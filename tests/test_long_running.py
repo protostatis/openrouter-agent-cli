@@ -86,6 +86,25 @@ async def test_acceptance_policy_marks_passing_check_verified(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_acceptance_policy_times_out_records_not_verified(tmp_path):
+    """A timed-out acceptance check never claims that work was verified."""
+    command = f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(10)'"
+    policy = UserCompletionPolicy(command=command, workdir=str(tmp_path), timeout_seconds=1)
+
+    decision = await policy(_checkpoint())
+
+    assert policy.last_result["status"] == "not_verified"
+    assert policy.last_result["timed_out"] is True
+    assert decision.action != "stop"
+
+    # A timeout does not poison the contract; a later check is still recorded
+    # as not_verified rather than incorrectly reusing an earlier status.
+    second = await policy(_checkpoint())
+    assert second.action != "stop"
+    assert policy.last_result["status"] == "not_verified"
+
+
+@pytest.mark.asyncio
 async def test_acceptance_policy_checks_turn_limit_and_repairs(tmp_path, monkeypatch):
     """A policy-enabled run can rescue work left unfinished at the turn limit."""
     engine = _engine_with_task(

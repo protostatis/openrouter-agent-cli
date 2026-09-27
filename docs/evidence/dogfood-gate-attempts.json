@@ -1,0 +1,310 @@
+{
+  "program": "internal dogfood gate",
+  "generated_at_utc": "2026-09-07",
+  "note": "Sanitized digest of attempt records under ~/.openrouter-agent-cli/workbench/ (outside the repo). Local file paths and model transcripts are deliberately excluded.",
+  "attempt_count": 20,
+  "status_counts": {
+    "verified": 13,
+    "not_verified": 4,
+    "failed": 2,
+    "structural_violation": 1
+  },
+  "attempts": [
+    {
+      "batch": "gate-batch1",
+      "task_id": "new-utils-test-module",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_utils.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 184.051,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "readme-max-commands",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "README.md"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 288.265,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-content-dict-serialized",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 321.515,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-decode-tool-args-nonstr",
+      "status": "not_verified",
+      "acceptance_status": "verified",
+      "changed_files": [],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 781.005,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-empty-session-id",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 158.272,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-help-covers-commands",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 734.926,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-session-path-sanitized",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 117.109,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-tools-constant-unique",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 104.284,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "test-truncate-boundaries",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 108.197,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch1",
+      "task_id": "version-flag",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "openrouter_agent_cli/cli.py",
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 385.317,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "readme-task-verify-flags",
+      "status": "failed",
+      "acceptance_status": "failed",
+      "changed_files": [],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 125.475,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "test-cwd-not-found-message",
+      "status": "not_verified",
+      "acceptance_status": "verified",
+      "changed_files": [],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 505.969,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "test-estimate-tokens-missing-content",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 39.394,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "test-help-covers-commands-retry",
+      "status": "not_verified",
+      "acceptance_status": "verified",
+      "changed_files": [],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 115.699,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "test-run-bash-failing-structured",
+      "status": "not_verified",
+      "acceptance_status": "verified",
+      "changed_files": [],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 150.032,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "test-status-lines-content",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 187.584,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch2",
+      "task_id": "test-wildcard-allow-deny-precedence",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": null,
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 76.713,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch3-guarded",
+      "task_id": "test-cwd-not-found-message",
+      "status": "failed",
+      "acceptance_status": "failed",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": [],
+      "policy_violations": [],
+      "no_progress_nudge_fired": true,
+      "duration_seconds": 239.356,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch3-guarded",
+      "task_id": "test-decode-tool-args-nonstr",
+      "status": "verified",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": [],
+      "policy_violations": [],
+      "no_progress_nudge_fired": false,
+      "duration_seconds": 54.474,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    },
+    {
+      "batch": "gate-batch3-guarded",
+      "task_id": "test-help-covers-commands-guarded",
+      "status": "structural_violation",
+      "acceptance_status": "verified",
+      "changed_files": [
+        "tests/test_cli.py"
+      ],
+      "structural_findings": [
+        {
+          "path": "tests/test_cli.py",
+          "line": 593
+        }
+      ],
+      "policy_violations": [],
+      "no_progress_nudge_fired": true,
+      "duration_seconds": 166.908,
+      "source_commit": "3db51fcdc1753ba7568003256ba8ac4977c50bba",
+      "agent_returncode": 0
+    }
+  ]
+}

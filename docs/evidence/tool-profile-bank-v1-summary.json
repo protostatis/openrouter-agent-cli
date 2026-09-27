@@ -1,0 +1,201 @@
+{
+  "bank_id": "tool-profile-bank-v1",
+  "seed": 20260907,
+  "model": "nvidia/nemotron-3.5-lightning:free",
+  "prompt_sha256": "03f0713da89cf697a251f098eae0b0a7ce2cdfa7f7e9ba93dcf7e875e76427db",
+  "pairs_completed": 40,
+  "pairs_planned": 40,
+  "per_arm": {
+    "full7": {
+      "pass": 36,
+      "fail": 4,
+      "infrastructure_errors": 0,
+      "total_tokens": 621457,
+      "model_requests": 235,
+      "median_latency_seconds": 97.6
+    },
+    "core4": {
+      "pass": 33,
+      "fail": 7,
+      "infrastructure_errors": 1,
+      "total_tokens": 443307,
+      "model_requests": 186,
+      "median_latency_seconds": 77.7
+    }
+  },
+  "paired_outcomes": {
+    "both_pass": 31,
+    "both_fail": 2,
+    "full7_only_pass": 5,
+    "core4_only_pass": 2
+  },
+  "pass_rate_difference_points": 7.5,
+  "decision": "no meaningful difference: treat the profiles as equivalent",
+  "per_task": {
+    "clamp": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "dedup": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "greet": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "hard_api_rename": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "hard_crash_counts": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "hard_crashing_script": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "hard_docs_conflict": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "hard_fix_failing_test": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "hard_ledger": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "hard_ledger_refunds": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "hard_normalize_csv": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "hard_shared_constant": {
+      "full7": "pass",
+      "core4": "task_fail"
+    },
+    "hard_silent_offbyone": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "hard_stale_refactor": {
+      "core4": "infrastructure_error",
+      "full7": "pass"
+    },
+    "hard_zero_division": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "novel01_attrerror_none": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "novel02_typeerror_missing_arg": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "novel03_unbound_local": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "novel04_recursion": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "novel05_silent_min_not_max": {
+      "core4": "task_fail",
+      "full7": "pass"
+    },
+    "novel06_silent_sum_not_count": {
+      "full7": "task_fail",
+      "core4": "task_fail"
+    },
+    "novel07_silent_count_not_truthiness": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "novel08_transform_csv_normalize": {
+      "core4": "pass",
+      "full7": "task_fail"
+    },
+    "novel09_transform_filter_records": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "novel10_transform_join_totals": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "repair01_missing_name": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "repair02_missing_tier": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "repair03_running_total_scope": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "repair04_recursion_base": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "silent01_inclusive_age": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "silent02_max_score": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "silent03_count_records": {
+      "full7": "task_fail",
+      "core4": "task_fail"
+    },
+    "sumlib": {
+      "full7": "pass",
+      "core4": "task_fail"
+    },
+    "transform01_csv_dates": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "transform02_filter_priority": {
+      "full7": "pass",
+      "core4": "task_fail"
+    },
+    "transform03_join_account_totals": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "xfix01_indexerror": {
+      "core4": "pass",
+      "full7": "pass"
+    },
+    "xfix03_typeerror_none": {
+      "core4": "pass",
+      "full7": "task_fail"
+    },
+    "xfix07_silent_range": {
+      "full7": "pass",
+      "core4": "pass"
+    },
+    "xfix10_silent_strsort": {
+      "full7": "pass",
+      "core4": "pass"
+    }
+  },
+  "evidence_provenance": {
+    "copied_from": ".agent-eval/tool-profile-bank-v1/summary.json (gitignored local record)",
+    "generated_at_utc": "2026-09-07",
+    "note": "Verdicts per attempt are in .agent-eval/tool-profile-bank-v1/runs/*.jsonl locally; this summary holds the aggregates the docs cite."
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "repo": ".",
+  "results_dir": "~/.openrouter-agent-cli/workbench/gate-batch1",
+  "defaults": {
+    "max_concurrency": 1,
+    "max_turns": 24,
+    "request_timeout": 60,
+    "provider_retries": 2,
+    "repeat_tool_call_limit": 1,
+    "tool_profile": "core4",
+    "task_timeout": 900,
+    "verify_timeout": 120
+  },
+  "tasks": [
+    {
+      "id": "test-empty-session-id",
+      "task": "Add one regression test to tests/test_cli.py proving that _sanitize_session_id called with an empty string returns 'default'. Place it in the existing TestSanitizeSessionId class. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-truncate-boundaries",
+      "task": "Add one regression test to tests/test_cli.py in the existing TestTruncate class proving _truncate counts characters, not bytes: _truncate('héllo wörld', 5) must return 'héllo...'. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-decode-tool-args-nonstr",
+      "task": "Add two regression tests to tests/test_cli.py in the existing TestDecodeToolArguments class proving _decode_tool_arguments returns an empty dict for non-string non-dict inputs such as True and 42. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-content-dict-serialized",
+      "task": "Add one regression test to tests/test_cli.py in the existing TestMessageContentAsText class proving _message_content_as_text JSON-serializes dict content: {'content': {'a': 1}} must return '{\"a\": 1}'. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-session-path-sanitized",
+      "task": "Add one regression test to tests/test_cli.py in the existing TestSessionManagement class proving a session id with unsafe characters is sanitized in the session file name: creating the CLI with session_id 'a/b c' must give _session_path.name 'a_b_c.json'. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "new-utils-test-module",
+      "task": "Create a new test module tests/test_utils.py with small tests for two helpers in openrouter_agent_cli/utils.py: _decode_tool_arguments (none, dict, valid JSON string, invalid string) and format_shell_result (returns a JSON string and preserves the payload keys). Keep the module self-contained. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_utils.py",
+      "allowed_paths": ["tests/test_utils.py"]
+    },
+    {
+      "id": "version-flag",
+      "task": "Add a --version command-line flag to openrouter_agent_cli/cli.py that prints the installed package version and exits with status 0 before any other argument handling (argparse version action is acceptable). Then add one test to tests/test_cli.py that runs 'python -m openrouter_agent_cli.cli --version' as a subprocess, asserts exit code 0, and asserts the output contains a digit. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["openrouter_agent_cli/cli.py", "tests/test_cli.py"]
+    },
+    {
+      "id": "readme-max-commands",
+      "task": "The README.md 'Slash commands' section is missing two commands that exist in openrouter_agent_cli/cli.py SLASH_COMMANDS. Read that list and add the missing entries to the README section in the same bullet style and order, without changing anything else in the README.",
+      "verify_command": "uv run python -c \"import re; from openrouter_agent_cli.cli import SLASH_COMMANDS; text=open('README.md').read(); section=text.split('## Slash commands')[1]; missing=[c for c in SLASH_COMMANDS if c not in section]; assert not missing, f'missing: {missing}'; print('all slash commands documented')\"",
+      "allowed_paths": ["README.md"]
+    },
+    {
+      "id": "test-help-covers-commands",
+      "task": "Add one guard test to tests/test_cli.py proving every entry in the SLASH_COMMANDS list appears in the output of the '/help' command. Call the async command handler with the '/help' line, capture printed output, and assert every SLASH_COMMANDS entry is present. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-tools-constant-unique",
+      "task": "Add one regression test to tests/test_cli.py in the existing TestToolsConstant class proving the TOOLS list has no duplicate tool function names and every tool has a non-empty description string. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    }
+  ]
+}

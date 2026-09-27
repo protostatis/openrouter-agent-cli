@@ -374,3 +374,68 @@ def test_assisted_profile_validated_before_suite_load() -> None:
             ]
         )
     assert "unknown --assisted-profile" in str(exc.value)
+
+
+def test_profile_tool_profile_reaches_engine_and_record(
+    tmp_path: Path, suite: Path
+) -> None:
+    """The chosen tool surface is executed and recorded per attempt."""
+    loaded = load_suite(suite)
+    runner = SuiteRunner(
+        loaded,
+        [
+            Profile(
+                name="worker",
+                prompt="You are a coding agent.",
+                mock_script=dict(_MOCK_DOES_WORK),
+                tool_profile="core4",
+            )
+        ],
+        eval_dir=tmp_path / "eval",
+    )
+    records = asyncio.run(runner.run_and_verify())
+    assert all(r["engine"]["tool_profile"] == "core4" for r in records)
+    # The mock saw only the four core tools on the wire:
+    greet = next(r for r in records if r["task_id"] == "greet")
+    assert greet["verdict"] == "pass"
+
+
+def test_profile_rejects_unknown_tool_profile() -> None:
+    """A typo in tool_profile fails at construction, never mid-campaign."""
+    with pytest.raises(ValueError, match="unknown tool profile"):
+        Profile(name="bad", prompt="P", tool_profile="core5")
+
+
+def test_seed_shuffles_task_order_deterministically(tmp_path: Path, suite: Path) -> None:
+    """A seed gives a fixed, reproducible task order; no seed keeps suite order."""
+    loaded = load_suite(suite)
+    profiles = [Profile(name="worker", prompt="P", mock_script=dict(_MOCK_DOES_WORK))]
+
+    unseeded = SuiteRunner(loaded, profiles, eval_dir=tmp_path / "e1").build_schedule()
+    assert [t.id for t, _, _ in unseeded][:3] == ["greet", "sumlib", "clamp"]
+
+    seeded_a = SuiteRunner(
+        loaded, profiles, eval_dir=tmp_path / "e2", seed=20260907
+    ).build_schedule()
+    seeded_b = SuiteRunner(
+        loaded, profiles, eval_dir=tmp_path / "e3", seed=20260907
+    ).build_schedule()
+    assert [t.id for t, _, _ in seeded_a] == [t.id for t, _, _ in seeded_b]
+    assert [t.id for t, _, _ in seeded_a] != [t.id for t, _, _ in unseeded]
+
+
+def test_bank_manifest_validates_and_orders_deterministically() -> None:
+    """The frozen bank loads, matches the suites, and orders tasks by seed."""
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(repo / "scripts" / "run_tool_profile_bank.py"), "--dry-run"],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert "40 tasks validated" in proc.stdout
+    assert "Dry run OK" in proc.stdout
+    # Deterministic seeded order (first entry is stable):
+    assert "novel09_transform_filter_records" in proc.stdout
