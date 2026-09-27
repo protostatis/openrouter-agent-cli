@@ -75,16 +75,24 @@ openrouter-agent
 ```
 
 Or store the key once in the global config file, so every launch works from
-any directory (an exported shell variable still wins; a project-local `.env`
-overrides the global file for that project):
+any directory:
 
 ```bash
+mkdir -p ~/.openrouter-agent-cli
+chmod 700 ~/.openrouter-agent-cli
 printf 'OPENROUTER_API_KEY=sk-or-...\n' > ~/.openrouter-agent-cli/.env
 chmod 600 ~/.openrouter-agent-cli/.env
 ```
 
-The file is read automatically on every start, and any allowlisted variable
-works there too (for example `OPENROUTER_MODEL=...`).
+The file is read automatically on every start (any non-sensitive allowlisted
+variable works there too, for example `OPENROUTER_MODEL=...`). Precedence,
+strongest first: `--api-key`; `--env-file`; an exported environment variable;
+then the auto-loaded files, which never replace a variable that is already
+set. Credentials (`OPENROUTER_API_KEY`, `BRAVE_API_KEY`) auto-load only from
+your app-home `.env` and a source-checkout `.env` — a project-local `./.env`
+can set other settings but never the key, so a repository you clone cannot
+silently replace your credential. `UNBROWSER_BINARY` and
+`OPENROUTER_AGENT_SESSION_DIR` never load automatically.
 
 Or without installation:
 
@@ -145,7 +153,7 @@ openrouter-agent --discovery mock --allow-discovery --prompt "what is unbrowser?
 openrouter-agent --discovery real --allow-discovery  # needs BRAVE_API_KEY for search
 ```
 
-Env auto-load: `.env` in `cwd` and repo root is loaded via `python-dotenv` (or allowlisted fallback: `OPENROUTER_*, BRAVE_API_KEY, UNBROWSER_BINARY`). `--env-file` overrides.
+Env auto-load: the app-home `.env` (`~/.openrouter-agent-cli/.env`) and a source-checkout `.env` supply credentials; a project-local `./.env` supplies other allowlisted settings. Files load via `python-dotenv` when installed, else a built-in `KEY=VALUE` reader. `UNBROWSER_BINARY` and `OPENROUTER_AGENT_SESSION_DIR` never auto-load. `--env-file` overrides everything.
 
 Disable tools:
 

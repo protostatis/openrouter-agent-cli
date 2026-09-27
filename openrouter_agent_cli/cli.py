@@ -3916,6 +3916,12 @@ _ENV_ALLOWLIST = {
 }
 _ENV_SENSITIVE = {"UNBROWSER_BINARY", "OPENROUTER_AGENT_SESSION_DIR"}
 _ENV_AUTO_ALLOWLIST = _ENV_ALLOWLIST - _ENV_SENSITIVE
+# Credentials auto-load only from the user's own files (the app-home .env and
+# a source-checkout .env), never from a project-local ./.env: a repository the
+# CLI is launched inside may be untrusted, and it must not be able to silently
+# substitute the key the agent spends against. A deliberate per-project key
+# still works via --env-file, --api-key, or an exported environment variable.
+_ENV_CREDENTIALS = {"OPENROUTER_API_KEY", "BRAVE_API_KEY"}
 
 
 def _global_env_path() -> Path:
@@ -3933,7 +3939,13 @@ def _global_env_path() -> Path:
     return session_root.parent / ".env"
 
 
-def _missing_api_key_message() -> str:
+def _missing_api_key_message(env_file: str | None = None) -> str:
+    if env_file:
+        return (
+            "ERROR: missing OpenRouter API key. Set OPENROUTER_API_KEY, pass "
+            "--api-key, or add OPENROUTER_API_KEY=... to "
+            f"{Path(env_file).expanduser()} (the --env-file you passed)."
+        )
     return (
         "ERROR: missing OpenRouter API key. Set OPENROUTER_API_KEY, pass "
         "--api-key, or put OPENROUTER_API_KEY=... in "
@@ -3941,62 +3953,70 @@ def _missing_api_key_message() -> str:
     )
 
 
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Minimal KEY=VALUE reader used when python-dotenv is not installed."""
+    values: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
 def _load_dotenv(env_file: str | None = None) -> None:
-    """Load .env allowlisted keys only. Auto-load excludes sensitive executable vars.
+    """Load allowlisted .env keys into the environment.
 
-    Auto-load order (first file defining a key wins; real environment
-    variables always win over auto-loaded files): project .env in the current
-    directory, then the global app-home .env, then a source-checkout .env.
+    An explicit ``--env-file`` loads exactly that file, and its values win
+    over anything already in the environment. Automatic loading never
+    replaces a variable that is already set, and reads files in this order
+    (first file defining a key wins):
+
+    1. credentials (OPENROUTER_API_KEY, BRAVE_API_KEY): the app-home .env,
+       then a source-checkout .env — never a project-local ./.env;
+    2. all other allowlisted settings: project ./.env, then the app-home
+       .env, then a source-checkout .env.
+
+    Sensitive variables (_ENV_SENSITIVE) never load automatically.
     """
-    is_explicit = env_file is not None
-    allow = _ENV_ALLOWLIST if is_explicit else _ENV_AUTO_ALLOWLIST
-    candidates: list[Path] = []
     if env_file:
-        candidates.append(Path(env_file).expanduser())
+        batches = [(Path(env_file).expanduser(), _ENV_ALLOWLIST)]
     else:
-        candidates.extend(
-            [
-                Path.cwd() / ".env",
-                _global_env_path(),
-                Path(__file__).resolve().parent.parent / ".env",
-            ]
-        )
+        project = Path.cwd() / ".env"
+        app_home = _global_env_path()
+        checkout = Path(__file__).resolve().parent.parent / ".env"
+        credentials = _ENV_AUTO_ALLOWLIST & _ENV_CREDENTIALS
+        settings = _ENV_AUTO_ALLOWLIST - _ENV_CREDENTIALS
+        batches = [
+            (app_home, credentials),
+            (checkout, credentials),
+            (project, settings),
+            (app_home, settings),
+            (checkout, settings),
+        ]
 
-    # Prefer python-dotenv if installed, but filter to allowlist
     try:
         from dotenv import dotenv_values  # type: ignore
-
-        for p in candidates:
-            if not p.is_file():
-                continue
-            try:
-                for k, v in dotenv_values(p).items():
-                    if k not in allow or v is None:
-                        continue
-                    if is_explicit or k not in os.environ:
-                        os.environ[k] = v
-            except Exception:
-                continue
-        return
     except ImportError:
-        pass
-    # Minimal fallback
-    for env_path in candidates:
-        if not env_path.is_file():
+        dotenv_values = None  # type: ignore[assignment]
+
+    for path, allowed in batches:
+        if not allowed or not path.is_file():
             continue
         try:
-            for line in env_path.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
+            values = (
+                dotenv_values(path)
+                if dotenv_values is not None
+                else _parse_env_file(path)
+            )
+            for key, value in values.items():
+                if key not in allowed or value is None:
                     continue
-                if line.startswith("export "):
-                    line = line[7:].strip()
-                k, v = line.split("=", 1)
-                k = k.strip()
-                if k not in allow or (not is_explicit and k in os.environ):
-                    continue
-                v = v.strip().strip('"').strip("'")
-                os.environ[k] = v
+                if env_file or key not in os.environ:
+                    os.environ[key] = value
         except Exception:
             continue
 
@@ -4259,7 +4279,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--env-file",
-        help="Path to .env file to load (allowlisted keys only, no override).",
+        help=(
+            "Path to a .env file to load (allowlisted keys only; these values "
+            "win over the environment and over auto-loaded files)."
+        ),
     )
     parser.add_argument(
         "--debug",
@@ -4280,7 +4303,7 @@ def main() -> int:
         _load_dotenv(args.env_file)
 
     if not args.api_key:
-        print(_missing_api_key_message(), file=sys.stderr)
+        print(_missing_api_key_message(args.env_file), file=sys.stderr)
         raise SystemExit(1)
 
     explicit_system_prompt = args.system_prompt is not None
