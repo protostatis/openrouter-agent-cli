@@ -36,7 +36,7 @@ not a product decision.
 | Basic functions | 4 | greet, sum, clamp, dedup |
 | Multi-file / tests / debugging | 10 | stale refactor, shared constant, failing test fix, API rename, docs conflict |
 
-Tasks come from three existing suites (`crash_novel_v1`, 
+Tasks come from three existing suites (`crash_novel_v1`,
 `bounded_generalization_v2`, `coding_smoke_v1`) whose verifiers have already
 run in prior campaigns. The two web tasks and the adherence-control task are
 excluded: live web content makes verdicts flaky, and the control task measures
