@@ -35,7 +35,7 @@
 ## Packaging and DX
 
 - [ ] verify install path works (`pip install -e .`)
-- [ ] verify CLI entrypoint works (`openrouter-agent --help`)
+- [ ] verify CLI entrypoints work (`openrouter-agent --help`, `ora --help`)
 - [ ] verify A/B scripts run from a clean checkout
 
 ## Legal and metadata
