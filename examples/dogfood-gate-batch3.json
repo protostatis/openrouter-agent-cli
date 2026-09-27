@@ -1,0 +1,35 @@
+{
+  "repo": ".",
+  "results_dir": "~/.openrouter-agent-cli/workbench/gate-batch3-guarded",
+  "defaults": {
+    "max_concurrency": 1,
+    "max_turns": 24,
+    "request_timeout": 60,
+    "provider_retries": 2,
+    "repeat_tool_call_limit": 1,
+    "tool_profile": "core4",
+    "task_timeout": 900,
+    "verify_timeout": 120
+  },
+  "tasks": [
+    {
+      "id": "test-decode-tool-args-nonstr",
+      "task": "Add two regression tests to tests/test_cli.py in the existing TestDecodeToolArguments class proving _decode_tool_arguments returns an empty dict for non-string non-dict inputs such as True and 42. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-help-covers-commands-guarded",
+      "task": "Add one guard test to tests/test_cli.py proving every entry in the SLASH_COMMANDS list appears in the output of the '/help' command. Import SLASH_COMMANDS, call the async _handle_command method with '/help', capture printed output with capsys, and assert every entry is present. Write the test class as normal multi-line Python code with real newlines. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"],
+      "test_growth": {"minimum_new_nodes": 1}
+    },
+    {
+      "id": "test-cwd-not-found-message",
+      "task": "Add one regression test to tests/test_cli.py proving the '/cwd /nonexistent-path-xyz' command keeps the working directory unchanged and prints a message containing 'Directory not found'. Use pytest.mark.asyncio, call the async _handle_command method, and capture stdout with capsys. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    }
+  ]
+}

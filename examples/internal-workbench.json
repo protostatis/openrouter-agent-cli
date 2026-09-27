@@ -1,0 +1,29 @@
+{
+  "repo": ".",
+  "results_dir": "~/.openrouter-agent-cli/workbench/example",
+  "defaults": {
+    "max_concurrency": 1,
+    "max_turns": 24,
+    "request_timeout": 60,
+    "provider_retries": 2,
+    "repeat_tool_call_limit": 1,
+    "tool_profile": "core4",
+    "task_timeout": 900,
+    "verify_timeout": 120
+  },
+  "tasks": [
+    {
+      "id": "runtime-policy-tests",
+      "task": "Add a focused regression test for one bounded runtime policy behavior. Keep the change limited to tests and run the specified acceptance command.",
+      "verify_command": "uv run pytest -q tests/test_runtime_policy.py",
+      "allowed_paths": ["tests/test_runtime_policy.py"]
+    },
+    {
+      "id": "review-runtime-policy-tests",
+      "task": "Review the existing runtime-policy tests for correctness and test quality. Make only documentation changes if they are needed to explain the tested behavior.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "require_changes": false,
+      "allowed_paths": ["README.md"]
+    }
+  ]
+}

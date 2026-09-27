@@ -1,0 +1,58 @@
+{
+  "repo": ".",
+  "results_dir": "~/.openrouter-agent-cli/workbench/gate-batch2",
+  "defaults": {
+    "max_concurrency": 1,
+    "max_turns": 24,
+    "request_timeout": 60,
+    "provider_retries": 2,
+    "repeat_tool_call_limit": 1,
+    "tool_profile": "core4",
+    "task_timeout": 900,
+    "verify_timeout": 120
+  },
+  "tasks": [
+    {
+      "id": "test-status-lines-content",
+      "task": "Add one regression test to tests/test_cli.py proving the status lines include the current model and working directory values: build a CLI instance, call _status_lines(), and assert some line contains the model string and some line contains the workdir path. Change nothing else. Write the test as normal multi-line code; never use literal backslash-n escape sequences to represent newlines.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-estimate-tokens-missing-content",
+      "task": "Add one regression test to tests/test_cli.py in the existing TestEstimateTokens class proving a message with no content key still yields the minimum estimate: _estimate_tokens([{'role': 'user'}]) returns 1. Change nothing else. Write the test as normal multi-line code; never use literal backslash-n escape sequences to represent newlines.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-wildcard-allow-deny-precedence",
+      "task": "Add one regression test to tests/test_cli.py in the existing TestToolPermissionPolicy class proving deny precedence over a wildcard allow: ToolPermissionPolicy(allow={'*'}, deny={'run_bash'}).decision('run_bash') returns 'deny'. Change nothing else. Write the test as normal multi-line code; never use literal backslash-n escape sequences to represent newlines.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-cwd-not-found-message",
+      "task": "Add one regression test to tests/test_cli.py proving the '/cwd /nonexistent-path-xyz' command keeps the working directory unchanged and prints a message containing 'Directory not found'. Use pytest.mark.asyncio, call the async _handle_command method with a real httpx.AsyncClient or None, and capture stdout with capsys. Change nothing else. Write the test as normal multi-line code; never use literal backslash-n escape sequences to represent newlines.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-run-bash-failing-structured",
+      "task": "Add one regression test to tests/test_cli.py in the bash tool test section proving a failing command returns structured JSON with ok false and the real exit code: run cli._run_bash('exit 7') and assert the parsed result has ok == False and exit_code == 7. Change nothing else. Write the test as normal multi-line code; never use literal backslash-n escape sequences to represent newlines.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "test-help-covers-commands-retry",
+      "task": "Add one guard test to tests/test_cli.py proving every entry in the SLASH_COMMANDS list appears in the output of the '/help' command. Import SLASH_COMMANDS, call the async _handle_command method with '/help', capture printed output with capsys, and assert every entry is present. IMPORTANT formatting requirement: write the test class as normal multi-line Python code with real newlines; a previous attempt accidentally emitted literal backslash-n characters inside one comment line. Change nothing else.",
+      "verify_command": "uv run pytest -q tests/test_cli.py",
+      "allowed_paths": ["tests/test_cli.py"]
+    },
+    {
+      "id": "readme-task-verify-flags",
+      "task": "The README.md 'Useful flags' section does not document the --task and --verify-command flags even though openrouter_agent_cli/cli.py supports them. Add both flags to the example command in that section with a one-sentence explanation of what each does (set a coding task contract; set the acceptance command checked before completion). Change nothing else in the README.",
+      "verify_command": "uv run python -c \"text=open('README.md').read(); assert '--task' in text and '--verify-command' in text, 'flags missing from README'; section=text.split('## Useful flags')[1].split('## ')[0]; assert '--task' in section and '--verify-command' in section, 'flags missing from Useful flags section'; print('task and verify-command flags documented')\"",
+      "allowed_paths": ["README.md"]
+    }
+  ]
+}
