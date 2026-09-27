@@ -803,3 +803,15 @@ class TestVersionFlag:
         )
         assert result.returncode == 0
         assert any(c.isdigit() for c in result.stdout)
+
+
+class TestEntryPoints:
+    def test_short_alias_entry_point_matches_main_command(self):
+        """`ora` must stay wired to the same main() as `openrouter-agent`,
+        so the short install alias can never drift into a different program."""
+        tomllib = pytest.importorskip("tomllib")
+        root = Path(__file__).resolve().parents[1]
+        data = tomllib.loads((root / "pyproject.toml").read_text())
+        scripts = data["project"]["scripts"]
+        assert scripts["ora"] == "openrouter_agent_cli.cli:main"
+        assert scripts["ora"] == scripts["openrouter-agent"]

@@ -42,6 +42,14 @@ pip install openrouter-agent-cli          # from PyPI
 pipx install openrouter-agent-cli         # or isolated CLI install
 ```
 
+After installing, the agent runs from any terminal under two names: the full
+`openrouter-agent` and the short alias `ora`. They are the same program —
+use whichever you like (`ora --help` prints `usage: ora ...`). For example:
+
+```bash
+ora -p "Explain tail recursion" --no-tools
+```
+
 Or from a source checkout:
 
 ```bash
