@@ -89,6 +89,21 @@ schedule identities, expected task/profile repeat counts, treatment separation,
 and Bubblewrap receipts for real-model rows. It does not inspect model text or
 private verifier evidence.
 
+## Runtime policy controls
+
+The engine keeps bounded runtime controls in a separate
+`RuntimePolicyConfig`. The controls are selected per attempt and do not change
+tool schemas:
+
+- provider request timeout: 1–600 seconds;
+- retries after retryable provider errors: 0–5; and
+- repeated identical tool batches before the loop-break nudge: 1–3.
+
+The default values preserve the previous behavior. Completion checking remains
+a separate opt-in policy with a hard one-repair limit. Runtime controls should
+be recorded with any future campaign profile because changing them changes the
+execution policy, even when the model prompt and tools stay the same.
+
 ## Long-running launch checklist
 
 Run a real-model campaign only after all of these checks succeed:

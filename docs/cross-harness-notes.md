@@ -272,3 +272,65 @@ for this complex task.
 Provider capture recorded 52 model calls and 453,358 tokens across these
 three policy attempts. The first two attempts ended early after the repair
 cycle, so this is not a cost comparison with the unassisted arm.
+
+## Tool-count comparison: full7 versus core4 (exploratory, 2026-09-05)
+
+The same `report_pipeline` task was run three times with the existing seven
+tool interface (`full7`) and three times with only the four coding-loop tools
+(`core4`: `run_bash`, `read_file`, `write_file`, and `edit_file`). Runs were
+interleaved in this order: full7, core4, full7, core4, full7, core4. Both
+profiles used the same model, verifier, 32-turn limit, fresh Docker workspace,
+and tool-neutral system prompt. Provider requests were recorded by the
+capture proxy.
+
+The table shows the six individual Harbor trials grouped by profile; calls
+means model requests and tokens means provider-reported total tokens.
+
+| Profile | Trial rewards | Passed | Model calls | Provider tokens |
+|---|---|---:|---:|---:|
+| full7 | 1, 0, 0 | 1/3 | 25, 31, 32 (88 total) | 223,209; 321,035; 393,821 (938,065 total) |
+| core4 | 1, 1, 1 | 3/3 | 15, 17, 20 (52 total) | 72,974; 86,441; 152,639 (312,054 total) |
+
+All six trials completed without a Harbor infrastructure error. The two
+full7 failures produced the expected-looking report with a literal `\\n`
+between the rows, so the hidden verifier rejected them. The core4 runs passed
+the verifier in all three attempts. Every full7 request contained seven tool
+definitions and every core4 request contained four.
+
+This is evidence that the smaller interface performed better on this task in
+this small sample, not proof that tool count caused the difference. The model
+is stochastic, and three attempts per profile are not enough to estimate a
+reliable pass rate. The job artifacts are in
+`jobs/tool-profile-comparison-local/`; the matching proxy records are in
+`/tmp/capture.jsonl`.
+
+## Measurement corrections before further profile trials (2026-09-05)
+
+The first profile pilot exposed two measurement problems. The CLI appended a
+`use discover` instruction even when the four-tool profile did not expose that
+tool, and the proxy had no direct way to associate a request with its Harbor
+trial. The CLI now makes an inline `--system-prompt` exact, removes discovery
+instructions from profiles that cannot use them, and attaches a stable run ID
+and profile header to each model request. The proxy records non-secret hashes
+for the system prompt, initial task prompt, complete request, and tool schema.
+
+Future profile runs should use
+`scripts/run_tool_profile_comparison.py`. It randomizes which profile runs
+first within each pair and records the source wheel hash, prompt hash, run ID,
+and task checksum. The completion-policy campaign remains a separate effort:
+these profile trials must not change its frozen tool profile, task bank, or
+keep/reject thresholds.
+
+## Measurement validation pair (exploratory, 2026-09-05)
+
+One new randomized pair was run after the corrections. Both profiles passed
+the `report_pipeline` verifier without an infrastructure error. The seven-tool
+profile used 19 model calls and 125,770 provider tokens; the four-tool profile
+used 18 calls and 100,324 tokens.
+
+The proxy matched both trials to their explicit run IDs. The two trials had
+the same system-prompt hash, task-prompt hash, source-wheel digest, model, and
+task checksum. Every request had seven or four tool definitions as intended.
+This validates the recording path and prompt control, but it adds only one
+pair and does not change the earlier conclusion that more independent tasks
+are needed.
