@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..cli import OpenRouterAgentCLI, ToolPermissionPolicy
+from ..cli import OpenRouterAgentCLI, ToolPermissionPolicy, tools_for_profile
 from .audit import assert_audited
 from .records import (
     append_record,
@@ -47,6 +47,9 @@ class Profile:
     mock_script: dict[str, Any] | str | Path | None = None
     model: str = "mock-model"  # real-model profiles set their model name
     treatment: str = TREATMENT_MODEL_ALONE
+    # Tool surface passed to the engine ("full7" or "core4"). A/B comparisons
+    # that vary the tool count must keep every other profile field identical.
+    tool_profile: str = "full7"
     extra: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -55,6 +58,8 @@ class Profile:
                 f"unknown treatment {self.treatment!r}; expected "
                 f"{TREATMENT_MODEL_ALONE!r} or {TREATMENT_MODEL_PLUS_POLICY!r}"
             )
+        # Fail before any attempt runs so a typo cannot waste a campaign.
+        tools_for_profile(self.tool_profile)
 
     @property
     def uses_mock(self) -> bool:
@@ -79,6 +84,7 @@ class SuiteRunner:
         command_timeout: int = 30,
         workspace_root: Path | None = None,
         repeats: int = 1,
+        seed: int | None = None,
     ):
         if not profiles:
             raise ValueError("at least one profile is required")
@@ -90,6 +96,11 @@ class SuiteRunner:
         self.command_timeout = command_timeout
         self.workspace_root = workspace_root
         self.repeats = max(1, repeats)
+        # Optional deterministic task-order shuffle. Free-tier routing and
+        # provider latency drift over time; shuffling spreads that drift
+        # across tasks instead of letting suite order confound it. The seed
+        # is chosen before any attempt runs and recorded with the results.
+        self.seed = seed
         # Execution-containment gate (runs after field init).
         self._sandboxed = False
         uses_real = any(not p.uses_mock for p in profiles)
@@ -130,10 +141,15 @@ class SuiteRunner:
 
     def build_schedule(self) -> list[tuple[Task, Profile, int]]:
         """Paired schedule: task-major, profile order rotated per task."""
+        import random
+
+        tasks = list(self.suite.tasks)
+        if self.seed is not None:
+            random.Random(self.seed).shuffle(tasks)
         schedule: list[tuple[Task, Profile, int]] = []
         index = 0
         for repeat in range(self.repeats):
-            for t_idx, task in enumerate(self.suite.tasks):
+            for t_idx, task in enumerate(tasks):
                 for offset, profile in enumerate(self.profiles):
                     chosen = self.profiles[
                         (t_idx + repeat + offset) % len(self.profiles)
@@ -196,6 +212,7 @@ class SuiteRunner:
                 tools_enabled=True,
                 system_prompt=profile.prompt,
                 discovery_mode="off",
+                tool_profile=profile.tool_profile,
             )
             # Disposable workspace => allow-all is the documented eval contract.
             engine.policy = ToolPermissionPolicy(allow={"*"})
@@ -243,12 +260,18 @@ class SuiteRunner:
                             "completion_tokens"
                         ),
                         "total_tokens": engine.session_tokens.get("total_tokens"),
+                        # Number of provider requests actually made (cache
+                        # tracker observes exactly one request per call).
+                        "model_requests": engine.cache_context.snapshot().get(
+                            "requests", 0
+                        ),
                     }
                 )
                 record["engine"]["session_dir"] = str(
                     getattr(engine, "_session_path", "") or ""
                 )
                 record["engine"]["policy"] = "allow_all_disposable_workspace"
+                record["engine"]["tool_profile"] = profile.tool_profile
                 record["tool_calls"] = [
                     {
                         "name": rec.get("name"),

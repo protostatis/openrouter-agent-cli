@@ -12,7 +12,8 @@ Script format (JSON)::
     {
       "responses": [
         {"tool_calls": [{"name": "run_bash", "arguments": {"command": "ls"}}]},
-        {"text": "Done."}
+       {"text": "Done."}
+       {"error": "synthetic provider outage"}
       ]
     }
 
@@ -21,6 +22,7 @@ dry (so an agent that keeps asking still terminates with a final answer).
 """
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -79,10 +81,19 @@ class MockTransport:
         tool_choice: str = "auto",
         **kwargs: Any,
     ) -> dict[str, Any]:
+        # Snapshot, not a reference: the engine mutates its live message
+        # list across turns, and each recorded request must show the exact
+        # messages that were on the wire for that request.
         self.requests.append(
-            {"messages": messages or [], "tools": tools, "tool_choice": tool_choice}
+            {
+                "messages": copy.deepcopy(messages or []),
+                "tools": copy.deepcopy(tools),
+                "tool_choice": tool_choice,
+            }
         )
         spec = self._next()
+        if "error" in spec:
+            raise RuntimeError(str(spec["error"]))
         usage = {
             "prompt_tokens": 10,
             "completion_tokens": 5,

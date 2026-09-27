@@ -7,6 +7,7 @@ import asyncio
 import copy
 import difflib
 import hashlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -67,6 +68,7 @@ from openrouter_agent_cli.utils import (
 )
 from openrouter_agent_cli.cache import CacheAwareContext
 from openrouter_agent_cli.completion import UserCompletionPolicy, copy_result
+from openrouter_agent_cli.runtime_policy import RuntimePolicyConfig
 
 try:
     from openrouter_agent_cli.concurrent import run_concurrent
@@ -119,6 +121,7 @@ SLASH_COMMANDS = [
     "/exit",
     "/new",
     "/model",
+    "/retry",
     "/usage",
     "/status",
     "/task",
@@ -373,6 +376,29 @@ TOOLS = [
     DISCOVER_TOOL,
 ]
 
+# The full profile is the existing seven-tool interface. The core profile is
+# intentionally limited to the four tools needed for the basic coding loop so
+# experiments can vary tool count without changing any tool's wire contract.
+TOOL_PROFILE_FULL7 = "full7"
+TOOL_PROFILE_CORE4 = "core4"
+DEFAULT_TOOL_PROFILE = TOOL_PROFILE_FULL7
+TOOL_PROFILE_CHOICES = (TOOL_PROFILE_FULL7, TOOL_PROFILE_CORE4)
+_CORE4_TOOL_NAMES = frozenset({"run_bash", "read_file", "write_file", "edit_file"})
+
+
+def tools_for_profile(tool_profile: str) -> list[dict[str, Any]]:
+    """Return a fresh tool-spec list for a named experiment profile."""
+    if tool_profile == TOOL_PROFILE_FULL7:
+        return list(TOOLS)
+    if tool_profile == TOOL_PROFILE_CORE4:
+        return [
+            tool
+            for tool in TOOLS
+            if tool.get("function", {}).get("name") in _CORE4_TOOL_NAMES
+        ]
+    choices = ", ".join(TOOL_PROFILE_CHOICES)
+    raise ValueError(f"unknown tool profile {tool_profile!r}; choose one of: {choices}")
+
 
 def _tool_result_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
@@ -418,6 +444,55 @@ def _sanitize_session_id(session_id: str) -> str:
 
 def _truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
+
+
+_OPENROUTER_PRIVACY_SETTINGS_URL = "https://openrouter.ai/settings/privacy"
+_OPENROUTER_PREFERENCES_URL = "https://openrouter.ai/settings/preferences"
+_HTTP_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+
+
+def _openrouter_http_error_lines(response: Any) -> list[str]:
+    """Return bounded, actionable output for an OpenRouter HTTP error.
+
+    OpenRouter often includes the reason and a settings URL in the response
+    body. The old 300-character display could cut off that URL, leaving an
+    operator with no way to tell an account restriction from a transient outage.
+    The body is still bounded and terminal-sanitized by ``_log`` at the call
+    site because it is untrusted provider text.
+    """
+    body = str(getattr(response, "text", "") or "").strip()
+    lines = [f"HTTP {getattr(response, 'status_code', 'unknown')}: {_truncate(body, 4000)}"]
+
+    urls: list[str] = []
+    for match in _HTTP_URL_RE.findall(body):
+        url = match.rstrip(".,;:)]}")
+        if url not in urls:
+            urls.append(url)
+    if urls and not any(url in lines[0] for url in urls):
+        lines.append("Provider links: " + ", ".join(urls[:8]))
+
+    lowered = body.lower()
+    if "age_18plus" in lowered:
+        lines.append(
+            "This model requires an OpenRouter age confirmation; review: "
+            f"{_OPENROUTER_PREFERENCES_URL}"
+        )
+    if any(
+        term in lowered
+        for term in (
+            "guardrail",
+            "data policy",
+            "data_collection",
+            "no endpoints available",
+            "paid model training",
+        )
+    ):
+        lines.append(
+            "This is an OpenRouter account/provider eligibility restriction, not "
+            "the CLI tool-permission policy. Review: "
+            f"{_OPENROUTER_PRIVACY_SETTINGS_URL}"
+        )
+    return lines
 
 
 def _pretty_tool_args(args: dict[str, Any]) -> str:
@@ -495,6 +570,24 @@ _GENERIC_REPAIR_MESSAGE = (
     "make any necessary repairs, and reply when the task is complete."
 )
 
+# Required-change guard: after this many consecutive model turns with no
+# repository content change, inject one nudge; a further unchanged final
+# answer then ends the turn with an explicit stop message. The guard observes
+# actual worktree content (git status), not tool names: a failed edit_file or
+# a read-only run_bash both count as no progress, while any real content
+# change resets the counter.
+NO_PROGRESS_NUDGE_TURNS = 6
+_NO_PROGRESS_NUDGE_MESSAGE = (
+    "[controller] You have used several turns, but the worktree is still "
+    "unchanged. This task requires a repository change. On your next "
+    "response, make the smallest plausible edit using a file-writing tool, "
+    "or state one concrete blocker and stop. Do not continue inspecting."
+)
+_NO_PROGRESS_STOP_MESSAGE = (
+    "[cli] Stopped: this task requires a repository change, and the worktree "
+    "is still unchanged after a no-progress nudge."
+)
+
 
 class OpenRouterAgentCLI:
     def __init__(
@@ -515,6 +608,10 @@ class OpenRouterAgentCLI:
         task: str | None = None,
         verify_command: str | None = None,
         cache_mode: str = "auto",
+        tool_profile: str = DEFAULT_TOOL_PROFILE,
+        run_id: str | None = None,
+        runtime_policy: RuntimePolicyConfig | None = None,
+        require_repo_change: bool = False,
     ):
         self.api_key = api_key
         self.model = model
@@ -530,6 +627,19 @@ class OpenRouterAgentCLI:
         self.max_discover = max(1, min(10, max_discover))
         self.max_rounds = max(1, min(5, max_rounds))
         self.cache_mode = cache_mode if cache_mode in {"auto", "off"} else "auto"
+        self.runtime_policy = runtime_policy or RuntimePolicyConfig()
+        # Required-change guard (workbench/headless evaluation use): when set,
+        # a turn that ends without any repository content change is first
+        # nudged once, then stopped. Interactive sessions leave it off.
+        self.require_repo_change = bool(require_repo_change)
+        # Validate at construction so a profile cannot silently alter the
+        # request or execution surface after a run has started.
+        tools_for_profile(tool_profile)
+        self.tool_profile = tool_profile
+        self.run_id = str(
+            run_id or os.environ.get("OPENROUTER_AGENT_RUN_ID") or self.session_id
+        )
+        self.source_digest = os.environ.get("OPENROUTER_AGENT_SOURCE_DIGEST", "")
         self.non_interactive_mode = False
         # Optional bash-runner hook (evaluation sandbox seam). When set, it
         # replaces run_bash inside _run_bash and must return the same
@@ -581,6 +691,10 @@ class OpenRouterAgentCLI:
         # request failed (HTTP or transport) and the turn ended without work.
         # Evaluation grades infrastructure errors separately from task failure.
         self.terminal_status: str = "ok"
+        # A provider failure leaves the original request available for an
+        # explicit /retry after the operator fixes the provider or changes the
+        # model. New user input replaces this pending retry.
+        self._last_failed_prompt: str | None = None
         self._discovery_session: DiscoverySession | None = None
         self._discovery_poisoned = False
         self._debug = False
@@ -711,7 +825,7 @@ class OpenRouterAgentCLI:
             f"model:       {_strip_control_chars(self.model)}",
             f"session:     {_strip_control_chars(self.session_id)} ({session_state}, saved {saved_text})",
             f"workdir:     {_strip_control_chars(self.workdir)}",
-            f"tools:       {'on' if self.tools_enabled else 'off'} | policy: {scope}",
+            f"tools:       {'on' if self.tools_enabled else 'off'} | profile: {self.tool_profile} | policy: {scope}",
             f"shell risk:  {'disabled' if not self.tools_enabled else 'CRITICAL (local shell, unrestricted filesystem/network)'}",
             f"discovery:   {self.discovery_mode} | {discovery_state} | 30s timeout",
             f"context:     {non_system} messages, ~{estimated:,} tokens ({context_pct}%) / history limit {self.max_history_messages}",
@@ -770,10 +884,7 @@ class OpenRouterAgentCLI:
                         ),
                         file=sys.stderr,
                     )
-                    self._session_allow.clear()
-                    self._session_deny.clear()
-                    self._batch_allow.clear()
-                    self._batch_deny.clear()
+                    self._clear_ephemeral_permissions()
                 stored_workdir = data.get("workdir", "")
                 workdir_mismatch = False
                 if stored_workdir:
@@ -787,10 +898,7 @@ class OpenRouterAgentCLI:
                             ),
                             file=sys.stderr,
                         )
-                        self._session_allow.clear()
-                        self._session_deny.clear()
-                        self._batch_allow.clear()
-                        self._batch_deny.clear()
+                        self._clear_ephemeral_permissions()
                 stored_work_order = data.get("work_order")
                 if isinstance(stored_work_order, dict):
                     self.work_order = {
@@ -983,6 +1091,15 @@ class OpenRouterAgentCLI:
         self._last_displayed_check = None
         self.cache_context.reset_transient()
 
+    def _clear_ephemeral_permissions(self) -> None:
+        """Clear grants that must not cross a model, project, or session boundary."""
+        self._session_allow.clear()
+        self._session_deny.clear()
+        self._turn_allow.clear()
+        self._turn_deny.clear()
+        self._batch_allow.clear()
+        self._batch_deny.clear()
+
     def _display_check_result(self, result: dict[str, Any] | None) -> None:
         if not result:
             return
@@ -1050,12 +1167,21 @@ class OpenRouterAgentCLI:
 
     def _tool_names(self) -> list[str]:
         names: list[str] = []
-        for tool in TOOLS:
+        for tool in tools_for_profile(self.tool_profile):
             fn = tool.get("function", {})
             name = fn.get("name")
             if isinstance(name, str) and name:
                 names.append(name)
         return sorted(names)
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = {
+            "X-OpenRouter-Agent-Run-ID": self.run_id,
+            "X-OpenRouter-Agent-Tool-Profile": self.tool_profile,
+        }
+        if self.source_digest:
+            headers["X-OpenRouter-Agent-Source-Digest"] = self.source_digest
+        return headers
 
     def _valid_policy_target(self, target: str) -> bool:
         return target == "*" or target in self._tool_names()
@@ -1079,7 +1205,9 @@ class OpenRouterAgentCLI:
             print("Type /help for commands. Ctrl-C clears input; Ctrl-D exits.")
             print()
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(
+            timeout=self.runtime_policy.request_timeout_seconds
+        ) as client:
             if self.one_shot_prompt:
                 await self._run_user_turn(client, self.one_shot_prompt)
                 return
@@ -1170,6 +1298,7 @@ class OpenRouterAgentCLI:
             print("  /exit                 Exit")
             print("  /new [id]             New session (fresh history, like every harness)")
             print("  /model [id]           Show or set model")
+            print("  /retry                Retry the last provider-failed request")
             print("  /usage                Show message count + rough token estimate")
             print("  /status               Show model, session, cwd, policy, and context")
             print("  /task [description]   Show or set the current coding task")
@@ -1204,8 +1333,29 @@ class OpenRouterAgentCLI:
             else:
                 if len([m for m in self.messages if m.get("role") != "system"]) > 0:
                     print("[warning] Model changed; existing conversation history is retained.")
+                previous_model = self.model
                 self.model = arg
                 print(_strip_control_chars(f"Model set to: {self.model}"))
+                if self.model != previous_model:
+                    self._clear_ephemeral_permissions()
+                    print("Session-scoped permission grants cleared after model change.")
+            return True
+
+        if cmd == "/retry":
+            if arg:
+                print("Usage: /retry")
+                return True
+            if not self._last_failed_prompt or self.terminal_status != "provider_error":
+                print("No provider-failed request is waiting to be retried.")
+                return True
+            retry_text = self._last_failed_prompt
+            print("Retrying the last provider-failed request...")
+            await self._run_user_turn(
+                client,
+                retry_text,
+                append_user=False,
+                retrying=True,
+            )
             return True
 
         if cmd == "/usage":
@@ -1350,9 +1500,8 @@ class OpenRouterAgentCLI:
             self._tool_records.clear()
             self._last_compaction_backup = None
             self._last_file_backup = None
-            self._session_allow.clear()
-            self._session_deny.clear()
-            self._batch_deny.clear()
+            self._clear_ephemeral_permissions()
+            self._last_failed_prompt = None
             self._reset_session_scoped_state()
             self._resumed = False
             self._save_session()
@@ -1368,9 +1517,8 @@ class OpenRouterAgentCLI:
             self._tool_records.clear()
             self._last_compaction_backup = None
             self._last_file_backup = None
-            self._session_allow.clear()
-            self._session_deny.clear()
-            self._batch_deny.clear()
+            self._clear_ephemeral_permissions()
+            self._last_failed_prompt = None
             self._reset_session_scoped_state()
             self._resumed = False
             self._save_session()
@@ -1528,8 +1676,8 @@ class OpenRouterAgentCLI:
             self._tool_records.clear()
             self._last_compaction_backup = None
             self._last_file_backup = None
-            self._session_allow.clear()
-            self._session_deny.clear()
+            self._clear_ephemeral_permissions()
+            self._last_failed_prompt = None
             self._reset_session_scoped_state()
             self._resumed = True
             self.messages = self._load_session()
@@ -1587,8 +1735,7 @@ class OpenRouterAgentCLI:
             self.workdir = candidate
             # A one-session grant must not silently follow a user into another
             # project. Persistent rules are shown explicitly by /policy.
-            self._session_allow.clear()
-            self._session_deny.clear()
+            self._clear_ephemeral_permissions()
             # Re-scope the acceptance contract to the new directory and reset
             # its status; the old directory's check result no longer applies.
             if self.completion_policy is not None or self.work_order is not None:
@@ -1665,10 +1812,11 @@ class OpenRouterAgentCLI:
         messages: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
+        profile_tools = tools_for_profile(self.tool_profile)
         if self.discovery_mode == "off":
-            tools = [t for t in TOOLS if t["function"]["name"] != "discover"] if self.tools_enabled and tool_choice != "none" else None
+            tools = [t for t in profile_tools if t["function"]["name"] != "discover"] if self.tools_enabled and tool_choice != "none" else None
         else:
-            tools = TOOLS if self.tools_enabled and tool_choice != "none" else None
+            tools = profile_tools if self.tools_enabled and tool_choice != "none" else None
         effective_tool_choice = (
             "none" if tool_choice == "none" or not self.tools_enabled else "auto"
         )
@@ -1683,6 +1831,8 @@ class OpenRouterAgentCLI:
             tools=tools,
             parallel_tool_calls=parallel,
             on_retry=self._on_retry,
+            extra_headers=self._request_headers(),
+            max_retries=self.runtime_policy.provider_retry_limit,
         )
         if self.model_transport is not None:
             # Test/evaluation transport: receives the identical request the
@@ -1712,6 +1862,60 @@ class OpenRouterAgentCLI:
             "retrying",
             f"model request {attempt}/{total} after HTTP {status}; next attempt in {wait:.0f}s",
         )
+
+    async def _repo_content_signature(self) -> str | None:
+        """Content-state signature of the working tree, or None outside git.
+
+        Must be CONTENT-based, not path-based: appending to an already-new
+        file changes no paths, so a status listing alone would wrongly read
+        as "no progress". The signature hashes the changed/deleted/untracked
+        path list together with each file's content. A failed edit, a
+        read-only command, or a pure mtime change all count as "unchanged".
+        Never raises: an unusable repository disables the guard.
+        """
+        try:
+            inside = json.loads(
+                await run_bash(
+                    "git rev-parse --is-inside-work-tree",
+                    self.workdir,
+                    10,
+                    structured=True,
+                )
+            )
+            if not (
+                isinstance(inside, dict)
+                and inside.get("exit_code") == 0
+                and str(inside.get("stdout") or "").strip() == "true"
+            ):
+                return None
+            listing = json.loads(
+                await run_bash(
+                    "git ls-files -m -d -o --exclude-standard -z",
+                    self.workdir,
+                    10,
+                    structured=True,
+                )
+            )
+            if not isinstance(listing, dict) or listing.get("exit_code") != 0:
+                return None
+            root = Path(self.workdir)
+            entries: list[str] = []
+            for raw_path in str(listing.get("stdout") or "").split("\0"):
+                path = raw_path
+                if not path:
+                    continue
+                try:
+                    data = (root / path).read_bytes()
+                    entries.append(
+                        f"{path}:{hashlib.sha256(data).hexdigest()}"
+                    )
+                except OSError:
+                    entries.append(f"{path}:<unreadable-or-deleted>")
+            return hashlib.sha256(
+                "\n".join(sorted(entries)).encode("utf-8")
+            ).hexdigest()
+        except Exception:
+            return None
 
     def _split_for_compaction(
         self,
@@ -2675,6 +2879,13 @@ class OpenRouterAgentCLI:
     ) -> str:
         if not self.tools_enabled:
             return f"Tool blocked: tools are disabled. Requested '{tool_name}'."
+        profile_names = set(self._tool_names())
+        all_tool_names = {
+            tool.get("function", {}).get("name")
+            for tool in TOOLS
+        }
+        if tool_name not in profile_names and tool_name in all_tool_names:
+            return f"Tool unavailable in {self.tool_profile} profile: {tool_name}"
 
         decision = self._effective_policy_decision(tool_name)
         if decision == "deny":
@@ -3120,7 +3331,16 @@ class OpenRouterAgentCLI:
         )
         self._output_response(summary)
 
-    async def _run_user_turn(self, client: httpx.AsyncClient, user_text: str) -> str:
+    async def _run_user_turn(
+        self,
+        client: httpx.AsyncClient,
+        user_text: str,
+        *,
+        append_user: bool = True,
+        retrying: bool = False,
+    ) -> str:
+        if not retrying:
+            self._last_failed_prompt = None
         self._turn_allow.clear()
         self._turn_deny.clear()
         self._batch_allow.clear()
@@ -3136,7 +3356,12 @@ class OpenRouterAgentCLI:
             self.work_order["status"] = "not_verified"
             self.work_order["last_check"] = None
         try:
-            return await self._run_user_turn_impl(client, user_text)
+            result = await self._run_user_turn_impl(
+                client, user_text, append_user=append_user
+            )
+            if self.terminal_status != "provider_error":
+                self._last_failed_prompt = None
+            return result
         except asyncio.CancelledError:
             self._log("[cancelled] Active turn cancelled; returning to prompt.")
             self._save_session()
@@ -3148,13 +3373,26 @@ class OpenRouterAgentCLI:
             self._batch_deny.clear()
             self._set_activity("idle")
 
-    async def _run_user_turn_impl(self, client: httpx.AsyncClient, user_text: str) -> str:
-        self.messages.append(
-            {"role": "user", "content": self._work_order_message(user_text)}
-        )
+    async def _run_user_turn_impl(
+        self,
+        client: httpx.AsyncClient,
+        user_text: str,
+        *,
+        append_user: bool = True,
+    ) -> str:
+        if append_user:
+            self.messages.append(
+                {"role": "user", "content": self._work_order_message(user_text)}
+            )
         last_tool_signature: str | None = None
         repeated_count = 0
         discover_rounds = 0
+        # Required-change guard state (active only when require_repo_change):
+        # baseline worktree signature, consecutive unchanged model turns, and
+        # whether the one permitted nudge has been injected.
+        baseline_signature: str | None = None
+        unchanged_turns = 0
+        no_progress_nudged = False
 
         turn = 0
         turn_limit = self.max_turns
@@ -3167,14 +3405,16 @@ class OpenRouterAgentCLI:
                 self._set_activity("requesting model", f"turn {turn + 1}/{self.max_turns}")
                 response = await self._call_openrouter(client, self.messages)
             except httpx.HTTPStatusError as e:
-                detail = _truncate(e.response.text, 300)
-                self._log(f"[openrouter] HTTP {e.response.status_code}: {detail}")
+                for line in _openrouter_http_error_lines(e.response):
+                    self._log(f"[openrouter] {line}")
                 self.terminal_status = "provider_error"
+                self._last_failed_prompt = user_text
                 self._save_session()
                 return ""
             except Exception as e:
                 self._log(f"[openrouter] Request failed: {e}")
                 self.terminal_status = "provider_error"
+                self._last_failed_prompt = user_text
                 self._save_session()
                 return ""
 
@@ -3188,6 +3428,41 @@ class OpenRouterAgentCLI:
                 text = message.get("content") or message.get("reasoning") or ""
                 if not text:
                     text = f"[empty response, finish_reason={finish_reason}]"
+                # Required-change gate runs before any completion checkpoint:
+                # a final answer on an unchanged worktree is premature. The
+                # first one is suppressed and nudged; the next one stops the
+                # turn with an explicit message (the workbench then records
+                # the attempt as not_verified via its own no-change rule).
+                if self.require_repo_change:
+                    signature = await self._repo_content_signature()
+                    if signature is None:
+                        # Outside git: the guard cannot observe progress and
+                        # must stay silent rather than treat everything as
+                        # "unchanged".
+                        pass
+                    else:
+                        changed = (
+                            baseline_signature is not None
+                            and signature != baseline_signature
+                        )
+                        if baseline_signature is None:
+                            baseline_signature = signature
+                        if not changed:
+                            if no_progress_nudged:
+                                self._log("[controller] stopping: worktree still unchanged after nudge")
+                                self._save_session()
+                                return _NO_PROGRESS_STOP_MESSAGE
+                            self.messages.append(
+                                {"role": "user", "content": _NO_PROGRESS_NUDGE_MESSAGE}
+                            )
+                            no_progress_nudged = True
+                            self._log(
+                                "[controller] final answer suppressed: injecting no-progress nudge"
+                            )
+                            if turn + 1 >= turn_limit:
+                                turn_limit += 1
+                            turn += 1
+                            continue
                 should_continue, result = await self._handle_final_answer(
                     text, turn + 1
                 )
@@ -3216,7 +3491,7 @@ class OpenRouterAgentCLI:
                 repeated_count = 0
                 last_tool_signature = signature
 
-            if repeated_count >= 1:
+            if repeated_count >= self.runtime_policy.repeated_tool_call_limit:
                 nudge = (
                     "STOP. You repeated the same tool call without progress. "
                     "Do not call additional tools. Reply with a concise final answer."
@@ -3452,6 +3727,32 @@ class OpenRouterAgentCLI:
                 return ""
 
             turn += 1
+            # Required-change guard: observe the actual worktree after this
+            # model turn's tools ran. Tool names are irrelevant here — a
+            # failed edit_file or a read-only command both count as no
+            # progress; any real content change resets the counter.
+            if self.require_repo_change:
+                signature = await self._repo_content_signature()
+                if signature is not None:
+                    if baseline_signature is None:
+                        baseline_signature = signature
+                        unchanged_turns = 1
+                    elif signature != baseline_signature:
+                        unchanged_turns = 0
+                    else:
+                        unchanged_turns += 1
+                    if (
+                        not no_progress_nudged
+                        and unchanged_turns >= NO_PROGRESS_NUDGE_TURNS
+                    ):
+                        self.messages.append(
+                            {"role": "user", "content": _NO_PROGRESS_NUDGE_MESSAGE}
+                        )
+                        no_progress_nudged = True
+                        self._log(
+                            "[controller] no-progress nudge injected: "
+                            f"{unchanged_turns} turns without a worktree change"
+                        )
             # A policy-enabled run that exhausts its normal budget has not
             # emitted a final answer, but it may still have left a
             # nearly-complete workspace behind. Give the user-owned acceptance
@@ -3486,6 +3787,9 @@ _ENV_ALLOWLIST = {
     "OPENROUTER_AGENT_MAX_CONCURRENCY",
     "OPENROUTER_AGENT_MAX_DISCOVER",
     "OPENROUTER_AGENT_MAX_ROUNDS",
+    "OPENROUTER_AGENT_REQUEST_TIMEOUT",
+    "OPENROUTER_AGENT_PROVIDER_RETRIES",
+    "OPENROUTER_AGENT_REPEAT_TOOL_CALL_LIMIT",
     "OPENROUTER_AGENT_REFERER",
     "OPENROUTER_AGENT_TITLE",
     "OPENROUTER_AGENT_SESSION_DIR",
@@ -3555,6 +3859,76 @@ def _load_system_prompt(path: str | None) -> str:
         raise RuntimeError(f"Failed to read system prompt file {p}: {e}") from e
 
 
+def _inject_runtime_context(
+    system_prompt: str,
+    *,
+    tool_profile: str,
+    discovery_mode: str,
+    max_discover: int,
+    max_rounds: int,
+    max_concurrency: int,
+) -> str:
+    """Add runtime facts without advertising tools the profile cannot use."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if "Current date" not in system_prompt:
+        system_prompt += f"\n[Current date: {today} | Knowledge cutoff: 2026-01-04]"
+
+    discovery_available = (
+        tool_profile == TOOL_PROFILE_FULL7 and discovery_mode != "off"
+    )
+    if discovery_available:
+        system_prompt += " — use discover for live info after cutoff"
+        system_prompt += (
+            f"\n[Caps: max_discover={max_discover}/batch, "
+            f"max_rounds={max_rounds}, max_concurrency={max_concurrency} — "
+            "you define within caps]"
+        )
+    system_prompt += "\n"
+    return system_prompt
+
+
+def _adapt_system_prompt_for_profile(
+    system_prompt: str, *, tool_profile: str, discovery_mode: str
+) -> str:
+    """Remove discovery instructions when the current profile cannot use it."""
+    if tool_profile == TOOL_PROFILE_FULL7 and discovery_mode != "off":
+        return system_prompt
+    without_discovery_phrase = system_prompt.replace(", and web discovery", "")
+    lines = [
+        line
+        for line in without_discovery_phrase.splitlines()
+        if "discover" not in line.lower()
+    ]
+    return "\n".join(lines)
+
+
+def _prepare_system_prompt(
+    system_prompt: str,
+    *,
+    explicit: bool,
+    tool_profile: str,
+    discovery_mode: str,
+    max_discover: int,
+    max_rounds: int,
+    max_concurrency: int,
+) -> str:
+    system_prompt = _adapt_system_prompt_for_profile(
+        system_prompt,
+        tool_profile=tool_profile,
+        discovery_mode=discovery_mode,
+    )
+    if explicit:
+        return system_prompt
+    return _inject_runtime_context(
+        system_prompt,
+        tool_profile=tool_profile,
+        discovery_mode=discovery_mode,
+        max_discover=max_discover,
+        max_rounds=max_rounds,
+        max_concurrency=max_concurrency,
+    )
+
+
 def main() -> int:
     # Pre-load default .env (allowlisted) so OPENROUTER_API_KEY/MODEL are available for defaults
     _load_dotenv()
@@ -3570,6 +3944,11 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(
         description="Standalone OpenRouter terminal agent with tool actions and context management."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"openrouter-agent-cli {importlib.metadata.version('openrouter-agent-cli')}",
     )
     parser.add_argument(
         "--api-key",
@@ -3610,6 +3989,24 @@ def main() -> int:
         help=f"Default timeout in seconds for run_bash (default: {DEFAULT_COMMAND_TIMEOUT}).",
     )
     parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=float(os.environ.get("OPENROUTER_AGENT_REQUEST_TIMEOUT", "60")),
+        help="Provider request timeout in seconds (1-600, default: 60).",
+    )
+    parser.add_argument(
+        "--provider-retries",
+        type=int,
+        default=int(os.environ.get("OPENROUTER_AGENT_PROVIDER_RETRIES", "3")),
+        help="Retries after a retryable provider error (0-5, default: 3).",
+    )
+    parser.add_argument(
+        "--repeat-tool-call-limit",
+        type=int,
+        default=int(os.environ.get("OPENROUTER_AGENT_REPEAT_TOOL_CALL_LIMIT", "1")),
+        help="Repeated identical tool batches before the loop-break nudge (1-3, default: 1).",
+    )
+    parser.add_argument(
         "--task",
         help="Explicit coding task contract to carry across a resumable session.",
     )
@@ -3629,13 +4026,35 @@ def main() -> int:
         help="Disable all tool calling.",
     )
     parser.add_argument(
+        "--tool-profile",
+        choices=TOOL_PROFILE_CHOICES,
+        default=os.environ.get("OPENROUTER_AGENT_TOOL_PROFILE", DEFAULT_TOOL_PROFILE),
+        help="Tool surface: full7 (default) or core4 (run_bash/read_file/write_file/edit_file).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=os.environ.get("OPENROUTER_AGENT_RUN_ID"),
+        help="Stable identifier attached to captured model requests (defaults to the session ID).",
+    )
+    parser.add_argument(
         "--allow-tools",
         action="store_true",
         help="Pre-allow every tool for this process (harness-facing; used by headless evaluation runs in disposable workspaces).",
     )
     parser.add_argument(
+        "--require-repo-change",
+        action="store_true",
+        help="Required-change guard: nudge once after several unchanged turns, "
+        "suppress a premature final answer, and stop if the worktree stays "
+        "unchanged (workbench/headless evaluation use).",
+    )
+    parser.add_argument(
         "--system-prompt-file",
         help="Path to a custom system prompt file.",
+    )
+    parser.add_argument(
+        "--system-prompt",
+        help="Use this system prompt instead of the default or prompt file.",
     )
     parser.add_argument(
         "--eval-report",
@@ -3715,11 +4134,26 @@ def main() -> int:
         )
         raise SystemExit(1)
 
+    explicit_system_prompt = args.system_prompt is not None
     try:
-        system_prompt = _load_system_prompt(args.system_prompt_file)
+        system_prompt = (
+            args.system_prompt
+            if explicit_system_prompt
+            else _load_system_prompt(args.system_prompt_file)
+        )
     except RuntimeError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(1)
+
+    system_prompt = _prepare_system_prompt(
+        system_prompt,
+        explicit=explicit_system_prompt,
+        tool_profile=args.tool_profile,
+        discovery_mode=args.discovery,
+        max_discover=args.max_discover,
+        max_rounds=args.max_rounds,
+        max_concurrency=args.max_concurrency,
+    )
 
     # Default to fresh session for -p (one-shot) when --session-id not explicitly given
     # Prevents crypto-contamination via shared default.json (50-msg pollution)
@@ -3728,11 +4162,6 @@ def main() -> int:
         args.session_id = f"ephemeral-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
         print(f"[session] one-shot fresh session: {args.session_id} (use --session-id to persist)", file=sys.stderr)
 
-    # Inject runtime context: current date (model otherwise thinks 2025) and caps
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    if "Current date" not in system_prompt:
-        system_prompt += f"\n[Current date: {today} | Knowledge cutoff: 2026-01-04 — use discover for live info after cutoff]\n"
-    system_prompt += f"\n[Caps: max_discover={args.max_discover}/batch, max_rounds={args.max_rounds}, max_concurrency={args.max_concurrency} — you define within caps]\n"
 
     cli = OpenRouterAgentCLI(
         api_key=args.api_key,
@@ -3751,6 +4180,14 @@ def main() -> int:
         task=args.task,
         verify_command=args.verify_command,
         cache_mode=args.cache_mode,
+        tool_profile=args.tool_profile,
+        run_id=args.run_id,
+        runtime_policy=RuntimePolicyConfig(
+            request_timeout_seconds=args.request_timeout,
+            provider_retry_limit=args.provider_retries,
+            repeated_tool_call_limit=args.repeat_tool_call_limit,
+        ),
+        require_repo_change=bool(getattr(args, "require_repo_change", False)),
     )
     cli._debug = bool(args.debug)
     if args.allow_discovery:

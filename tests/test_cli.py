@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -17,11 +18,17 @@ from openrouter_agent_cli.cli import (
     DEFAULT_SYSTEM_PROMPT,
     OpenRouterAgentCLI,
     TOOLS,
+    TOOL_PROFILE_CORE4,
+    TOOL_PROFILE_FULL7,
     ToolPermissionPolicy,
     _estimate_tokens,
+    _adapt_system_prompt_for_profile,
     _message_content_as_text,
+    _openrouter_http_error_lines,
+    _prepare_system_prompt,
     _sanitize_session_id,
     _truncate,
+    tools_for_profile,
 )
 from openrouter_agent_cli.utils import _decode_tool_arguments
 
@@ -68,6 +75,9 @@ class TestSanitizeSessionId:
         result = _sanitize_session_id("!!!")
         assert result == "___"
 
+    def test_empty_string_returns_default(self):
+        assert _sanitize_session_id("") == "default"
+
 
 # ---------------------------------------------------------------------------
 # _truncate
@@ -84,6 +94,40 @@ class TestTruncate:
 
     def test_exact_length_unchanged(self):
         assert _truncate("abcde", 5) == "abcde"
+
+    def test_counts_characters_not_bytes(self):
+        assert _truncate("héllo wörld", 5) == "héllo..."
+
+
+class TestOpenRouterHttpErrors:
+    def test_account_restriction_keeps_settings_links_and_explanation(self):
+        response = MagicMock(
+            status_code=404,
+            text=(
+                '{"error":{"message":"No endpoints available due to guardrail '
+                'restrictions (account settings): Paid model training violation '
+                '(account settings)","metadata":{"url":"https://example.test/details"}}}'
+            ),
+        )
+
+        lines = _openrouter_http_error_lines(response)
+        rendered = "\n".join(lines)
+
+        assert "HTTP 404" in rendered
+        assert "https://example.test/details" in rendered
+        assert "account/provider eligibility restriction" in rendered
+        assert "https://openrouter.ai/settings/privacy" in rendered
+
+    def test_age_restriction_points_to_preferences(self):
+        response = MagicMock(
+            status_code=403,
+            text='{"message":"Please confirm age_18plus in account preferences"}',
+        )
+
+        rendered = "\n".join(_openrouter_http_error_lines(response))
+
+        assert "age confirmation" in rendered
+        assert "https://openrouter.ai/settings/preferences" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +157,12 @@ class TestDecodeToolArguments:
     def test_whitespace_string_returns_empty(self):
         assert _decode_tool_arguments("   ") == {}
 
+    def test_bool_returns_empty(self):
+        assert _decode_tool_arguments(True) == {}
+
+    def test_int_returns_empty(self):
+        assert _decode_tool_arguments(42) == {}
+
 
 # ---------------------------------------------------------------------------
 # _message_content_as_text
@@ -132,6 +182,10 @@ class TestMessageContentAsText:
     def test_list_content_serialized(self):
         result = _message_content_as_text({"content": [{"type": "text", "text": "hi"}]})
         assert "hi" in result
+
+    def test_dict_content_serialized(self):
+        result = _message_content_as_text({"content": {"a": 1}})
+        assert result == '{"a": 1}'
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +212,9 @@ class TestEstimateTokens:
             }
         ]
         assert _estimate_tokens(msgs) > 0
+
+    def test_message_no_content_key_yields_minimum(self):
+        assert _estimate_tokens([{"role": "user"}]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +250,10 @@ class TestToolPermissionPolicy:
     def test_allow_other_tool(self):
         policy = ToolPermissionPolicy(deny={"run_bash"})
         assert policy.decision("read_file") == "ask"
+
+    def test_deny_overrides_wildcard_allow(self):
+        policy = ToolPermissionPolicy(allow={"*"}, deny={"run_bash"})
+        assert policy.decision("run_bash") == "deny"
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +315,106 @@ class TestToolsConstant:
             assert "parameters" in fn
             assert "required" in fn["parameters"]
 
+    def test_tools_have_unique_names_and_nonempty_descriptions(self):
+        names = [t["function"]["name"] for t in TOOLS]
+        assert len(names) == len(set(names)), "Duplicate tool function names found"
+        for tool in TOOLS:
+            desc = tool["function"].get("description", "")
+            assert desc, f"Tool {tool['function']['name']} has empty or missing description"
+
+
+class TestToolProfiles:
+    def test_full7_preserves_existing_tool_order(self):
+        names = [t["function"]["name"] for t in tools_for_profile(TOOL_PROFILE_FULL7)]
+        assert names == [
+            "run_bash",
+            "list_dir",
+            "search_text",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "discover",
+        ]
+
+    def test_core4_keeps_coding_loop_tools_and_contracts(self):
+        tools = tools_for_profile(TOOL_PROFILE_CORE4)
+        full_by_name = {
+            t["function"]["name"]: t for t in tools_for_profile(TOOL_PROFILE_FULL7)
+        }
+        assert [t["function"]["name"] for t in tools] == [
+            "run_bash",
+            "read_file",
+            "write_file",
+            "edit_file",
+        ]
+        for tool in tools:
+            assert "parameters" in tool["function"]
+            assert "required" in tool["function"]["parameters"]
+            assert tool == full_by_name[tool["function"]["name"]]
+
+    def test_unknown_profile_is_rejected(self):
+        with pytest.raises(ValueError, match="unknown tool profile"):
+            tools_for_profile("not-a-profile")
+
+    @pytest.mark.asyncio
+    async def test_profile_is_reflected_in_wire_request(self):
+        captured: dict = {}
+
+        async def transport(_client, **kwargs):
+            captured.update(kwargs)
+            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+        cli = _make_cli(tool_profile=TOOL_PROFILE_CORE4, discovery_mode="auto")
+        cli.model_transport = transport
+        await cli._call_openrouter(MagicMock(), [{"role": "user", "content": "task"}])
+
+        assert [t["function"]["name"] for t in captured["tools"]] == [
+            "run_bash",
+            "read_file",
+            "write_file",
+            "edit_file",
+        ]
+        assert captured["extra_headers"]["X-OpenRouter-Agent-Run-ID"] == cli.run_id
+        assert captured["extra_headers"]["X-OpenRouter-Agent-Tool-Profile"] == "core4"
+
+    @pytest.mark.asyncio
+    async def test_core4_rejects_tools_outside_profile(self):
+        cli = _make_cli(tool_profile=TOOL_PROFILE_CORE4)
+        cli.policy.allow.add("*")
+        result = await cli._execute_tool("list_dir", {})
+        assert "unavailable in core4 profile" in result
+
+
+class TestProfileSystemPrompts:
+    def test_explicit_prompt_is_not_augmented(self):
+        prompt = _prepare_system_prompt(
+            "Use the available tools and stop when verified.",
+            explicit=True,
+            tool_profile=TOOL_PROFILE_CORE4,
+            discovery_mode="auto",
+            max_discover=5,
+            max_rounds=2,
+            max_concurrency=5,
+        )
+        assert prompt == "Use the available tools and stop when verified."
+
+    def test_core4_default_prompt_has_no_discovery_instruction(self):
+        prompt = _adapt_system_prompt_for_profile(
+            DEFAULT_SYSTEM_PROMPT,
+            tool_profile=TOOL_PROFILE_CORE4,
+            discovery_mode="auto",
+        )
+        assert "discover" not in prompt.lower()
+        assert "host shell" in prompt
+
+    def test_full7_prompt_keeps_discovery_instruction(self):
+        prompt = _adapt_system_prompt_for_profile(
+            DEFAULT_SYSTEM_PROMPT,
+            tool_profile=TOOL_PROFILE_FULL7,
+            discovery_mode="auto",
+        )
+        assert "discover" in prompt.lower()
+
 
 # ---------------------------------------------------------------------------
 # OpenRouterAgentCLI - session management
@@ -280,6 +441,10 @@ class TestSessionManagement:
         cli = _make_cli(session_id="my-test")
         assert cli._session_path.name == "my-test.json"
 
+    def test_session_path_sanitizes_unsafe_chars(self):
+        cli = _make_cli(session_id="a/b c")
+        assert cli._session_path.name == "a_b_c.json"
+
     def test_clear_session(self):
         cli = _make_cli()
         cli.messages.append({"role": "user", "content": "hello"})
@@ -287,6 +452,26 @@ class TestSessionManagement:
         cli.messages = [{"role": "system", "content": cli.system_prompt}]
         cli._save_session()
         assert len([m for m in cli.messages if m["role"] != "system"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_model_change_clears_ephemeral_permissions(self):
+        cli = _make_cli()
+        cli._session_allow.add("run_bash")
+        cli._session_deny.add("read_file")
+        cli._turn_allow.add("write_file")
+        cli._turn_deny.add("edit_file")
+        cli._batch_allow.add("list_dir")
+        cli._batch_deny.add("search_text")
+
+        await cli._handle_command(MagicMock(), "/model another-model")
+
+        assert cli.model == "another-model"
+        assert cli._session_allow == set()
+        assert cli._session_deny == set()
+        assert cli._turn_allow == set()
+        assert cli._turn_deny == set()
+        assert cli._batch_allow == set()
+        assert cli._batch_deny == set()
 
 
 # ---------------------------------------------------------------------------
@@ -587,3 +772,34 @@ class TestLoadSystemPrompt:
 
         with pytest.raises(RuntimeError, match="Failed to read"):
             _load_system_prompt("/nonexistent/prompt.md")
+
+
+# ---------------------------------------------------------------------------
+# Status lines (accepted dogfood patch, 2026-09-07)
+# ---------------------------------------------------------------------------
+
+
+class TestStatusLines:
+    def test_status_lines_include_model_and_workdir(self):
+        cli = _make_cli()
+        lines = cli._status_lines()
+        model_line = [line for line in lines if "model:" in line][0]
+        workdir_line = [line for line in lines if "workdir:" in line][0]
+        assert "test-model" in model_line, f"Expected model in line: {model_line}"
+        assert cli.workdir in workdir_line, f"Expected workdir in line: {workdir_line}"
+
+
+# ---------------------------------------------------------------------------
+# --version flag (accepted dogfood patch, cleaned, 2026-09-07)
+# ---------------------------------------------------------------------------
+
+
+class TestVersionFlag:
+    def test_version_flag_prints_version_and_exits_zero(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "openrouter_agent_cli.cli", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert any(c.isdigit() for c in result.stdout)
