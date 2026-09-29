@@ -23,12 +23,15 @@ from openrouter_agent_cli.cli import (
     ToolPermissionPolicy,
     _estimate_tokens,
     _adapt_system_prompt_for_profile,
+    _global_env_path,
     _message_content_as_text,
+    _missing_api_key_message,
     _openrouter_http_error_lines,
     _prepare_system_prompt,
     _sanitize_session_id,
     _truncate,
     tools_for_profile,
+    _load_dotenv,
 )
 from openrouter_agent_cli.utils import _decode_tool_arguments
 
@@ -818,3 +821,183 @@ class TestEntryPoints:
         scripts = data["project"]["scripts"]
         assert scripts["ora"] == "openrouter_agent_cli.cli:main"
         assert scripts["ora"] == scripts["openrouter-agent"]
+
+
+# Runs in a subprocess so the developer machine's real .env (present next to
+# the source checkout) can never leak keys into the test process. The child
+# prints only match booleans, never a value, so a failing assertion cannot
+# print a real credential either.
+_ENV_PROBE = """
+import os
+import sys
+
+mode = os.environ.get("PROBE_DOTENV_MODE", "auto")
+if mode == "block":
+    class _Blocker:
+        def find_spec(self, name, path=None, target=None):
+            if name == "dotenv":
+                raise ModuleNotFoundError("dotenv blocked for test")
+            return None
+
+    sys.meta_path.insert(0, _Blocker())
+elif mode == "fake":
+    import types
+
+    fake = types.ModuleType("dotenv")
+
+    def dotenv_values(path):
+        values = {}
+        with open(path) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+        return values
+
+    fake.dotenv_values = dotenv_values
+    sys.modules["dotenv"] = fake
+
+from openrouter_agent_cli.cli import _load_dotenv
+
+_load_dotenv(os.environ.get("PROBE_ENV_FILE") or None)
+for name in ("OPENROUTER_API_KEY", "OPENROUTER_MODEL"):
+    expected = os.environ.get("PROBE_EXPECT_" + name, "-")
+    actual = os.environ.get(name, "-")
+    print(name + "_MATCH=" + ("1" if actual == expected else "0"))
+"""
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _probe_env(
+    tmp_path: Path,
+    cwd: Path,
+    *,
+    expect: dict,
+    extra_env: dict | None = None,
+    mode: str = "auto",
+) -> dict:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": str(_REPO_ROOT),
+        "OPENROUTER_AGENT_SESSION_DIR": str(tmp_path / "sessions"),
+        "PROBE_DOTENV_MODE": mode,
+    }
+    for name, value in expect.items():
+        env["PROBE_EXPECT_" + name] = value
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(
+        [sys.executable, "-c", _ENV_PROBE],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    return dict(
+        line.split("=", 1)
+        for line in result.stdout.splitlines()
+        if "=" in line
+    )
+
+
+class TestGlobalEnvConfig:
+    @pytest.mark.parametrize("mode", ["auto", "fake", "block"])
+    def test_global_env_file_provides_api_key(self, tmp_path, mode):
+        """One edit to the app-home .env makes the key available on any start,
+        from any working directory — on the python-dotenv path ("fake"), the
+        built-in reader path ("block"), and whatever this machine has
+        ("auto")."""
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-global\n")
+        workdir = tmp_path / "elsewhere"
+        workdir.mkdir()
+        values = _probe_env(
+            tmp_path,
+            workdir,
+            expect={"OPENROUTER_API_KEY": "sk-or-from-global"},
+            mode=mode,
+        )
+        assert values["OPENROUTER_API_KEY_MATCH"] == "1"
+
+    def test_project_env_cannot_replace_credential_but_sets_settings(
+        self, tmp_path
+    ):
+        """A cloned repository's .env must not silently substitute the API key,
+        while ordinary project settings may still come from it."""
+        (tmp_path / ".env").write_text(
+            "OPENROUTER_API_KEY=sk-or-global\nOPENROUTER_MODEL=global-model\n"
+        )
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".env").write_text(
+            "OPENROUTER_API_KEY=sk-or-project\nOPENROUTER_MODEL=project-model\n"
+        )
+        values = _probe_env(
+            tmp_path,
+            project,
+            expect={
+                "OPENROUTER_API_KEY": "sk-or-global",
+                "OPENROUTER_MODEL": "project-model",
+            },
+        )
+        assert values["OPENROUTER_API_KEY_MATCH"] == "1"
+        assert values["OPENROUTER_MODEL_MATCH"] == "1"
+
+    def test_shell_environment_wins_over_env_files(self, tmp_path):
+        (tmp_path / ".env").write_text("OPENROUTER_MODEL=file-model\n")
+        workdir = tmp_path / "elsewhere"
+        workdir.mkdir()
+        values = _probe_env(
+            tmp_path,
+            workdir,
+            expect={"OPENROUTER_MODEL": "shell-model"},
+            extra_env={"OPENROUTER_MODEL": "shell-model"},
+        )
+        assert values["OPENROUTER_MODEL_MATCH"] == "1"
+
+    def test_explicit_env_file_overrides_environment(self, tmp_path):
+        """--env-file keeps its replace-everything semantics."""
+        explicit = tmp_path / "explicit.env"
+        explicit.write_text("OPENROUTER_API_KEY=sk-or-explicit\n")
+        workdir = tmp_path / "elsewhere"
+        workdir.mkdir()
+        values = _probe_env(
+            tmp_path,
+            workdir,
+            expect={"OPENROUTER_API_KEY": "sk-or-explicit"},
+            extra_env={
+                "OPENROUTER_API_KEY": "sk-or-shell",
+                "PROBE_ENV_FILE": str(explicit),
+            },
+        )
+        assert values["OPENROUTER_API_KEY_MATCH"] == "1"
+
+    def test_global_env_path_follows_session_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "home" / "sessions")
+        )
+        assert _global_env_path() == tmp_path / "home" / ".env"
+
+    def test_global_env_path_defaults_to_app_home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_AGENT_SESSION_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _global_env_path() == tmp_path / ".openrouter-agent-cli" / ".env"
+
+    def test_missing_key_error_points_at_global_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "OPENROUTER_AGENT_SESSION_DIR", str(tmp_path / "sessions")
+        )
+        message = _missing_api_key_message()
+        assert "ERROR: missing OpenRouter API key" in message
+        assert "--api-key" in message
+        assert str(tmp_path / ".env") in message
+
+    def test_missing_key_error_names_explicit_env_file(self, tmp_path):
+        """When --env-file was passed, name the file that was actually read
+        instead of a global path that was never consulted."""
+        message = _missing_api_key_message(str(tmp_path / "custom.env"))
+        assert str(tmp_path / "custom.env") in message
+        assert "--env-file" in message
